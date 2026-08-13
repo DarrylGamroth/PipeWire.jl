@@ -572,6 +572,87 @@ end
     @test_throws ArgumentError pod_value(audio_format())
 end
 
+@testset "container SPA POD values" begin
+    arrays = (
+        SPA.Array(Bool[true, false, true]),
+        SPA.Array(SPA.Id[SPA.Id(1), SPA.Id(7)]),
+        SPA.Array(Int32[-1, 0, 1]),
+        SPA.Array(Int64[-(Int64(1) << 40), Int64(1) << 40]),
+        SPA.Array(Float32[-1.5, 2.25]),
+        SPA.Array(Float64[-3.5, 4.75]),
+        SPA.Array([SPA.Rectangle(640, 480), SPA.Rectangle(1_920, 1_080)]),
+        SPA.Array([SPA.Fraction(24, 1), SPA.Fraction(30_000, 1_001)]),
+        SPA.Array([SPA.Fd(-1), SPA.Fd(9)]),
+        SPA.Array(Int32[]),
+    )
+
+    for array in arrays
+        pod = Pod(array)
+        @test pod_type(pod) == PipeWire.LibPipeWire.SPA_TYPE_Array
+        @test pod_value(typeof(array), pod) == array
+        @test pod_value(pod) == array
+        @test isconcretetype(typeof(array))
+        @test all(isconcretetype, fieldtypes(typeof(array)))
+    end
+
+    source = Int32[1, 2, 3]
+    array = SPA.Array(source)
+    source[1] = 9
+    @test array.values == Int32[1, 2, 3]
+
+    int_array_pod = Pod(SPA.Array(Int32[4, 5, 6]))
+    @test @inferred(pod_value(SPA.Array{Int32}, int_array_pod)) ==
+          SPA.Array(Int32[4, 5, 6])
+    @test_throws ArgumentError pod_value(SPA.Array{Int64}, int_array_pod)
+    @test_throws ArgumentError SPA.Array(Real[1, 2])
+    @test_throws ArgumentError Pod(SPA.Array(["not", "fixed-size"]))
+
+    children = [Pod(Int32(7)), Pod("hello"), Pod(SPA.Array(Int64[8, 9]))]
+    value = SPA.Struct(children)
+    children[1] = Pod(Int32(99))
+    pod = Pod(value)
+    @test pod_type(pod) == PipeWire.LibPipeWire.SPA_TYPE_Struct
+    decoded = @inferred pod_value(SPA.Struct, pod)
+    @test decoded == value
+    @test pod_value(pod) == value
+    @test isconcretetype(typeof(decoded))
+    @test all(isconcretetype, fieldtypes(typeof(decoded)))
+    @test pod_value(Int32, decoded.values[1]) == 7
+    @test pod_value(String, decoded.values[2]) == "hello"
+    @test pod_value(decoded.values[3]) == SPA.Array(Int64[8, 9])
+
+    partial_array_body = UInt8[]
+    PipeWire._append_bits!(partial_array_body, UInt32(sizeof(Int32)))
+    PipeWire._append_bits!(partial_array_body, UInt32(PipeWire.LibPipeWire.SPA_TYPE_Int))
+    append!(partial_array_body, UInt8[1, 2, 3])
+    partial_array = PipeWire._pod_from_body(
+        UInt32(PipeWire.LibPipeWire.SPA_TYPE_Array),
+        partial_array_body,
+    )
+    missing_array_header = PipeWire._pod_from_body(
+        UInt32(PipeWire.LibPipeWire.SPA_TYPE_Array),
+        UInt8[],
+    )
+    @test_throws ArgumentError pod_value(SPA.Array{Int32}, partial_array)
+    @test_throws ArgumentError pod_value(SPA.Array, missing_array_header)
+
+    unpadded_struct = PipeWire._pod_from_body(
+        UInt32(PipeWire.LibPipeWire.SPA_TYPE_Struct),
+        Pod(Int32(1)).data,
+    )
+    partial_struct = PipeWire._pod_from_body(
+        UInt32(PipeWire.LibPipeWire.SPA_TYPE_Struct),
+        UInt8[0x01],
+    )
+    @test_throws ArgumentError pod_value(SPA.Struct, unpadded_struct)
+    @test_throws ArgumentError pod_value(SPA.Struct, partial_struct)
+
+    oversized_header = UInt8[]
+    PipeWire._append_bits!(oversized_header, UInt32(1 << 20))
+    PipeWire._append_bits!(oversized_header, UInt32(PipeWire.LibPipeWire.SPA_TYPE_Bytes))
+    @test_throws ArgumentError Pod(oversized_header)
+end
+
 @testset "managed stream" begin
     context = Context()
     connection_properties = Properties(Dict("application.name" => "PipeWire.jl tests"))

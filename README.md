@@ -85,11 +85,19 @@ frame_size = Pod(SPA.Rectangle(1_920, 1_080))
 
 payload = Pod(SPA.Bytes(UInt8[0x01, 0x02]))
 @assert pod_value(SPA.Bytes, payload) == SPA.Bytes(UInt8[0x01, 0x02])
+
+rates = Pod(SPA.Array(Int32[44_100, 48_000, 96_000]))
+@assert pod_value(SPA.Array{Int32}, rates).values == Int32[44_100, 48_000, 96_000]
+
+record = Pod(SPA.Struct(Pod(Int32(7)), Pod("audio")))
+fields = pod_value(SPA.Struct, record).values
+@assert pod_value(Int32, fields[1]) == 7
 ```
 
 The scalar API covers `None`, boolean, ID, 32- and 64-bit integer, 32- and
 64-bit floating-point, string, bytes, rectangle, fraction, and file-descriptor
-PODs. Array, choice, struct, object, and sequence decoding is still in progress.
+PODs. Homogeneous arrays and heterogeneous structs are also supported. Choice,
+object, and sequence decoding is still in progress.
 
 `with_registry` connects to the default PipeWire daemon. For an embedded
 in-process core, use `with_registry(self=true)`.

@@ -70,16 +70,31 @@ end
     @test main_loop(context) === loop
     @test_throws InvalidStateException close(loop)
 
-    core = CoreConnection(context; self=true)
+    core_infos = CoreInfo[]
+    done_events = Tuple{UInt32,Cint}[]
+    core = CoreConnection(
+        context;
+        self=true,
+        on_info=(core, info) -> push!(core_infos, info),
+        on_done=(core, id, sequence) -> push!(done_events, (id, sequence)),
+    )
     @test isopen(core)
+    @test isconcretetype(typeof(core))
+    @test all(isconcretetype, fieldtypes(typeof(core)))
     @test main_loop(core) === loop
     @test_throws InvalidStateException close(context)
 
     registry = Registry(core)
     @test isopen(registry)
+    @test isconcretetype(typeof(registry))
+    @test all(isconcretetype, fieldtypes(typeof(registry)))
     @test_throws InvalidStateException close(core)
 
     roundtrip(registry)
+    @test length(core_infos) == 1
+    @test core_infos[1].id == 0
+    @test !isempty(core_infos[1].version)
+    @test length(done_events) == 1
     first_snapshot = globals(registry)
     @test !isempty(first_snapshot)
     @test issorted(first_snapshot; by=global_object -> global_object.id)

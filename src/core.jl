@@ -108,6 +108,18 @@ function _release_core(context::Context)
     end
 end
 
+"A copied information snapshot for the connected PipeWire core."
+struct CoreInfo
+    id::UInt32
+    cookie::UInt32
+    user_name::String
+    host_name::String
+    version::String
+    name::String
+    change_mask::UInt64
+    properties::Dict{String,String}
+end
+
 mutable struct CoreState
     loop::MainLoop
     lock::ReentrantLock
@@ -135,11 +147,52 @@ function _stop_after_callback(state, error=nothing)
     return nothing
 end
 
+function _invoke_core_callback(core, ::Val{Field}, args...) where {Field}
+    state = core.callback_state
+    callback = lock(state.lock) do
+        state.active ? getfield(core.callbacks, Field) : nothing
+    end
+    callback === nothing && return nothing
+    try
+        callback(core, args...)
+    catch error
+        _stop_after_callback(state, error)
+    end
+    return nothing
+end
+
+function _copy_core_info(pointer::Ptr{LibPipeWire.pw_core_info})
+    pointer == C_NULL && throw(ArgumentError("the core info pointer is null"))
+    info = unsafe_load(pointer)
+    return CoreInfo(
+        info.id,
+        info.cookie,
+        info.user_name == C_NULL ? "" : unsafe_string(info.user_name),
+        info.host_name == C_NULL ? "" : unsafe_string(info.host_name),
+        info.version == C_NULL ? "" : unsafe_string(info.version),
+        info.name == C_NULL ? "" : unsafe_string(info.name),
+        info.change_mask,
+        _copy_properties(info.props),
+    )
+end
+
+function _core_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_core_info})::Cvoid
+    core = _callback_state(data, CoreConnection)
+    try
+        _invoke_core_callback(core, Val(:on_info), _copy_core_info(info))
+    catch error
+        _stop_after_callback(core.callback_state, error)
+    end
+    return nothing
+end
+
 function _core_done(data::Ptr{Cvoid}, id::UInt32, sequence::Cint)::Cvoid
-    state = _callback_state(data, CoreState)
+    core = _callback_state(data, CoreConnection)
+    state = core.callback_state
     should_stop = lock(state.lock) do
         state.active && state.pending === sequence && (state.done = true)
     end
+    _invoke_core_callback(core, Val(:on_done), id, sequence)
     should_stop && _stop_after_callback(state)
     return nothing
 end
@@ -151,12 +204,19 @@ function _core_error(
     result::Cint,
     message::Cstring,
 )::Cvoid
-    state = _callback_state(data, CoreState)
+    core = _callback_state(data, CoreConnection)
+    state = core.callback_state
     detail = message == C_NULL ? nothing : unsafe_string(message)
-    _stop_after_callback(state, PipeWireError(:pw_core, result, detail))
+    error = PipeWireError(:pw_core, result, detail)
+    lock(state.lock) do
+        state.error[] === nothing && (state.error[] = error)
+    end
+    _invoke_core_callback(core, Val(:on_error), id, sequence, error)
+    _stop_after_callback(state)
     return nothing
 end
 
+const _CORE_INFO = Ref{Ptr{Cvoid}}(C_NULL)
 const _CORE_DONE = Ref{Ptr{Cvoid}}(C_NULL)
 const _CORE_ERROR = Ref{Ptr{Cvoid}}(C_NULL)
 const _REGISTRY_GLOBAL_ADDED = Ref{Ptr{Cvoid}}(C_NULL)
@@ -165,7 +225,7 @@ const _REGISTRY_GLOBAL_REMOVED = Ref{Ptr{Cvoid}}(C_NULL)
 function _core_events()
     return LibPipeWire.pw_core_events(
         UInt32(1),
-        _NULL_CALLBACK,
+        _CORE_INFO[],
         _CORE_DONE[],
         _NULL_CALLBACK,
         _CORE_ERROR[],
@@ -178,7 +238,8 @@ function _core_events()
 end
 
 """
-    CoreConnection(context::Context; self=false, properties=nothing)
+    CoreConnection(context::Context; self=false, properties=nothing,
+                   on_info=nothing, on_done=nothing, on_error=nothing)
 
 Connect `context` to a PipeWire core. By default this connects to the daemon
 selected by PipeWire's client configuration. Set `self=true` to connect the
@@ -186,10 +247,15 @@ context to an internal core, primarily for embedded use and deterministic
 tests. `properties` may be a [`Properties`](@ref) value or any iterable of
 string pairs. A `Properties` argument is copied and remains open.
 
+`on_info(core, info)` receives copied [`CoreInfo`](@ref) snapshots.
+`on_done(core, id, sequence)` observes synchronization acknowledgements, and
+`on_error(core, id, sequence, error)` observes native core errors. Callback
+types are part of the concrete `CoreConnection` type.
+
 Close every child [`Registry`](@ref), [`Stream`](@ref), and core-created proxy
 before closing the connection.
 """
-mutable struct CoreConnection
+mutable struct CoreConnection{Callbacks}
     handle::Ptr{LibPipeWire.pw_core}
     context::Context
     state_lock::ReentrantLock
@@ -199,9 +265,17 @@ mutable struct CoreConnection
     listener::Base.RefValue{LibPipeWire.spa_hook}
     events::Base.RefValue{LibPipeWire.pw_core_events}
     callback_state::CoreState
+    callbacks::Callbacks
 end
 
-function CoreConnection(context::Context; self::Bool=false, properties=nothing)
+function CoreConnection(
+    context::Context;
+    self::Bool=false,
+    properties=nothing,
+    on_info=nothing,
+    on_done=nothing,
+    on_error=nothing,
+)
     context_handle = _retain_core(context)
     native_properties = try
         _owned_native_properties(properties)
@@ -221,14 +295,27 @@ function CoreConnection(context::Context; self::Bool=false, properties=nothing)
     end
 
     state = CoreState(main_loop(context), ReentrantLock(), nothing, false, Ref{Any}(nothing), true)
+    callbacks = (on_info=on_info, on_done=on_done, on_error=on_error)
     listener = Ref(_zero_hook())
     events = Ref(_core_events())
-    result = GC.@preserve state listener events begin
+    core = CoreConnection(
+        handle,
+        context,
+        ReentrantLock(),
+        0,
+        0,
+        0,
+        listener,
+        events,
+        state,
+        callbacks,
+    )
+    result = GC.@preserve core listener events begin
         LibPipeWire.pw_core_add_listener(
             handle,
             Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
             Base.unsafe_convert(Ptr{LibPipeWire.pw_core_events}, events),
-            pointer_from_objref(state),
+            pointer_from_objref(core),
         )
     end
     if result < 0
@@ -237,7 +324,6 @@ function CoreConnection(context::Context; self::Bool=false, properties=nothing)
         throw(PipeWireError(:pw_core_add_listener, result))
     end
 
-    core = CoreConnection(handle, context, ReentrantLock(), 0, 0, 0, listener, events, state)
     finalizer(close, core)
     return core
 end
@@ -477,6 +563,11 @@ function _registry_global_removed(data::Ptr{Cvoid}, id::UInt32)::Cvoid
 end
 
 function _initialize_callbacks!()
+    _CORE_INFO[] = @cfunction(
+        _core_info,
+        Cvoid,
+        (Ptr{Cvoid}, Ptr{LibPipeWire.pw_core_info}),
+    )
     _CORE_DONE[] = @cfunction(_core_done, Cvoid, (Ptr{Cvoid}, UInt32, Cint))
     _CORE_ERROR[] = @cfunction(
         _core_error,
@@ -503,9 +594,9 @@ Create an owning proxy for the core registry and subscribe to global-object
 addition and removal events. Call [`roundtrip`](@ref) to receive the initial
 set of globals.
 """
-mutable struct Registry
+mutable struct Registry{CoreType<:CoreConnection}
     handle::Ptr{LibPipeWire.pw_registry}
-    core::CoreConnection
+    core::CoreType
     state_lock::ReentrantLock
     proxy_count::Int
     listener::Base.RefValue{LibPipeWire.spa_hook}

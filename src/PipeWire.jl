@@ -1,6 +1,7 @@
 module PipeWire
 
 export CoreConnection,
+    CoreInfo,
     Context,
     Device,
     DeviceInfo,

@@ -32,9 +32,9 @@ allocates zero bytes when the callback itself does not allocate. Callback error
 paths and the owned POD copy passed to `on_param_changed` are outside that
 steady-state allocation contract.
 """
-mutable struct Stream{Callbacks}
+mutable struct Stream{CoreType<:CoreConnection,Callbacks}
     handle::Ptr{LibPipeWire.pw_stream}
-    core::CoreConnection
+    core::CoreType
     state_lock::ReentrantLock
     callback_lock::ReentrantLock
     listener::Base.RefValue{LibPipeWire.spa_hook}

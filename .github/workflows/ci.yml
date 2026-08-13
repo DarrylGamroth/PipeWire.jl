@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Julia ${{ matrix.julia-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.10', '1']
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v3
+      - name: Install public PipeWire_jll
+        run: >-
+          julia --startup-file=no --project=.
+          -e 'using Pkg;
+          Pkg.develop(url="https://github.com/DarrylGamroth/PipeWire_jll.jl");
+          Pkg.instantiate()'
+      - name: Run tests
+        run: julia --startup-file=no --project=. -e 'using Pkg; Pkg.test()'

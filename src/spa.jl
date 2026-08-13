@@ -686,3 +686,124 @@ function audio_format(;
     _set_pod_body_size!(data)
     return Pod(data)
 end
+
+function _video_int32(value::Integer, name::AbstractString)
+    typemin(Int32) <= value <= typemax(Int32) ||
+        throw(ArgumentError("$name is outside Int32 range"))
+    return Int32(value)
+end
+
+function _video_property!(properties, key, value; flags=0)
+    value === nothing || push!(properties, SPA.Property(key, value; flags=flags))
+    return properties
+end
+
+_optional_spa_id(value::Nothing) = nothing
+_optional_spa_id(value::Integer) = SPA.Id(value)
+
+"""
+    video_format(; format=Video.RGBA, size=SPA.Rectangle(640, 480),
+                   framerate=SPA.Fraction(30, 1), kwargs...) -> Pod
+
+Build a fixed raw-video SPA format parameter. Optional raw-video fields are
+omitted when set to `nothing`. A supplied DRM modifier is marked mandatory, as
+required by PipeWire's raw-video format builder.
+"""
+function video_format(;
+    format::Video.Format=Video.RGBA,
+    size::SPA.Rectangle=SPA.Rectangle(640, 480),
+    framerate::Union{Nothing,SPA.Fraction}=SPA.Fraction(30, 1),
+    modifier::Union{Nothing,Integer}=nothing,
+    max_framerate::Union{Nothing,SPA.Fraction}=nothing,
+    views::Union{Nothing,Integer}=nothing,
+    interlace_mode::Union{Nothing,Integer}=nothing,
+    pixel_aspect_ratio::Union{Nothing,SPA.Fraction}=nothing,
+    multiview_mode::Union{Nothing,Integer}=nothing,
+    multiview_flags::Union{Nothing,Integer}=nothing,
+    chroma_site::Union{Nothing,Integer}=nothing,
+    color_range::Union{Nothing,Integer}=nothing,
+    color_matrix::Union{Nothing,Integer}=nothing,
+    transfer_function::Union{Nothing,Integer}=nothing,
+    color_primaries::Union{Nothing,Integer}=nothing,
+    id::Integer=LibPipeWire.SPA_PARAM_EnumFormat,
+)
+    size.width > 0 && size.height > 0 ||
+        throw(ArgumentError("video width and height must be positive"))
+    framerate === nothing || framerate.denom > 0 ||
+        throw(ArgumentError("video framerate denominator must be positive"))
+    max_framerate === nothing || max_framerate.denom > 0 ||
+        throw(ArgumentError("maximum video framerate denominator must be positive"))
+    pixel_aspect_ratio === nothing || pixel_aspect_ratio.denom > 0 ||
+        throw(ArgumentError("pixel aspect ratio denominator must be positive"))
+    modifier === nothing || typemin(Int64) <= modifier <= typemax(Int64) ||
+        throw(ArgumentError("video modifier is outside Int64 range"))
+
+    properties = SPA.Property[
+        SPA.Property(LibPipeWire.SPA_FORMAT_mediaType, SPA.Id(LibPipeWire.SPA_MEDIA_TYPE_video)),
+        SPA.Property(
+            LibPipeWire.SPA_FORMAT_mediaSubtype,
+            SPA.Id(LibPipeWire.SPA_MEDIA_SUBTYPE_raw),
+        ),
+        SPA.Property(LibPipeWire.SPA_FORMAT_VIDEO_format, SPA.Id(UInt32(format))),
+        SPA.Property(LibPipeWire.SPA_FORMAT_VIDEO_size, size),
+    ]
+    _video_property!(properties, LibPipeWire.SPA_FORMAT_VIDEO_framerate, framerate)
+    _video_property!(
+        properties,
+        LibPipeWire.SPA_FORMAT_VIDEO_modifier,
+        modifier === nothing ? nothing : Int64(modifier);
+        flags=SPA.PROPERTY_MANDATORY,
+    )
+    _video_property!(properties, LibPipeWire.SPA_FORMAT_VIDEO_maxFramerate, max_framerate)
+    _video_property!(
+        properties,
+        LibPipeWire.SPA_FORMAT_VIDEO_views,
+        views === nothing ? nothing : _video_int32(views, "video view count"),
+    )
+    _video_property!(
+        properties,
+        LibPipeWire.SPA_FORMAT_VIDEO_interlaceMode,
+        _optional_spa_id(interlace_mode),
+    )
+    _video_property!(
+        properties,
+        LibPipeWire.SPA_FORMAT_VIDEO_pixelAspectRatio,
+        pixel_aspect_ratio,
+    )
+    _video_property!(
+        properties,
+        LibPipeWire.SPA_FORMAT_VIDEO_multiviewMode,
+        _optional_spa_id(multiview_mode),
+    )
+    _video_property!(
+        properties,
+        LibPipeWire.SPA_FORMAT_VIDEO_multiviewFlags,
+        _optional_spa_id(multiview_flags),
+    )
+    _video_property!(
+        properties,
+        LibPipeWire.SPA_FORMAT_VIDEO_chromaSite,
+        _optional_spa_id(chroma_site),
+    )
+    _video_property!(
+        properties,
+        LibPipeWire.SPA_FORMAT_VIDEO_colorRange,
+        _optional_spa_id(color_range),
+    )
+    _video_property!(
+        properties,
+        LibPipeWire.SPA_FORMAT_VIDEO_colorMatrix,
+        _optional_spa_id(color_matrix),
+    )
+    _video_property!(
+        properties,
+        LibPipeWire.SPA_FORMAT_VIDEO_transferFunction,
+        _optional_spa_id(transfer_function),
+    )
+    _video_property!(
+        properties,
+        LibPipeWire.SPA_FORMAT_VIDEO_colorPrimaries,
+        _optional_spa_id(color_primaries),
+    )
+    return Pod(SPA.Object(LibPipeWire.SPA_TYPE_OBJECT_Format, id, properties))
+end

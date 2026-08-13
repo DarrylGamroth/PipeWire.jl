@@ -108,6 +108,17 @@ PODs. Homogeneous arrays, heterogeneous structs, choices, and objects with
 owned properties are also supported. Timed control sequences use concrete
 `SPA.Sequence` and `SPA.Control` values.
 
+Raw-video negotiation supports every PipeWire 1.6.8 pixel format and optional
+modifier, framerate, multiview, chroma, and colorimetry properties.
+
+```julia
+format = video_format(
+    format=Video.NV12,
+    size=SPA.Rectangle(1_920, 1_080),
+    framerate=SPA.Fraction(30_000, 1_001),
+)
+```
+
 `with_registry` connects to the default PipeWire daemon. For an embedded
 in-process core, use `with_registry(self=true)`.
 
@@ -169,8 +180,8 @@ end
 ```
 
 The generated `PipeWire.LibPipeWire` module remains available for client APIs
-that do not yet have a managed wrapper. Container SPA POD construction/parsing
-and video-format APIs are still in progress.
+that do not yet have a managed wrapper. Managed filter APIs and uncommon SPA
+pointer/bitmap POD values are still in progress.
 
 `PipeWire` and `PipeWire_jll` are published in
 [`DarrylGamrothRegistry`](https://github.com/DarrylGamroth/PackageRegistry).

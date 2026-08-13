@@ -401,3 +401,77 @@ end
     @test_throws ArgumentError pod_value(SPA.Sequence, partial_control)
     @test_throws ArgumentError pod_value(SPA.Sequence, truncated_control)
 end
+
+@testset "raw video format" begin
+    @test length(instances(Video.Format)) == 88
+    @test Video.DSP_F32 == Video.RGBA_F32
+
+    format = @inferred video_format()
+    object = pod_value(SPA.Object, format)
+    @test object.type == PipeWire.LibPipeWire.SPA_TYPE_OBJECT_Format
+    @test object.id == PipeWire.LibPipeWire.SPA_PARAM_EnumFormat
+    @test map(property -> property.key, object.properties) == UInt32[
+        PipeWire.LibPipeWire.SPA_FORMAT_mediaType,
+        PipeWire.LibPipeWire.SPA_FORMAT_mediaSubtype,
+        PipeWire.LibPipeWire.SPA_FORMAT_VIDEO_format,
+        PipeWire.LibPipeWire.SPA_FORMAT_VIDEO_size,
+        PipeWire.LibPipeWire.SPA_FORMAT_VIDEO_framerate,
+    ]
+    @test pod_value(SPA.Id, object.properties[1].value) ==
+          SPA.Id(PipeWire.LibPipeWire.SPA_MEDIA_TYPE_video)
+    @test pod_value(SPA.Id, object.properties[2].value) ==
+          SPA.Id(PipeWire.LibPipeWire.SPA_MEDIA_SUBTYPE_raw)
+    @test pod_value(SPA.Id, object.properties[3].value) == SPA.Id(UInt32(Video.RGBA))
+    @test pod_value(SPA.Rectangle, object.properties[4].value) == SPA.Rectangle(640, 480)
+    @test pod_value(SPA.Fraction, object.properties[5].value) == SPA.Fraction(30, 1)
+
+    complete = pod_value(
+        SPA.Object,
+        video_format(
+            format=Video.NV12,
+            size=SPA.Rectangle(1_920, 1_080),
+            framerate=SPA.Fraction(30_000, 1_001),
+            modifier=0,
+            max_framerate=SPA.Fraction(60, 1),
+            views=2,
+            interlace_mode=1,
+            pixel_aspect_ratio=SPA.Fraction(1, 1),
+            multiview_mode=2,
+            multiview_flags=3,
+            chroma_site=4,
+            color_range=1,
+            color_matrix=2,
+            transfer_function=3,
+            color_primaries=4,
+            id=4,
+        ),
+    )
+    @test complete.id == 4
+    @test length(complete.properties) == 17
+    property_by_key = Dict(property.key => property for property in complete.properties)
+    @test pod_value(SPA.Id, property_by_key[PipeWire.LibPipeWire.SPA_FORMAT_VIDEO_format].value) ==
+          SPA.Id(UInt32(Video.NV12))
+    @test pod_value(Int64, property_by_key[PipeWire.LibPipeWire.SPA_FORMAT_VIDEO_modifier].value) == 0
+    @test property_by_key[PipeWire.LibPipeWire.SPA_FORMAT_VIDEO_modifier].flags ==
+          SPA.PROPERTY_MANDATORY
+    @test pod_value(Int32, property_by_key[PipeWire.LibPipeWire.SPA_FORMAT_VIDEO_views].value) == 2
+    @test pod_value(
+        SPA.Fraction,
+        property_by_key[PipeWire.LibPipeWire.SPA_FORMAT_VIDEO_pixelAspectRatio].value,
+    ) == SPA.Fraction(1, 1)
+
+    no_rate = pod_value(SPA.Object, video_format(framerate=nothing))
+    @test all(
+        property -> property.key != PipeWire.LibPipeWire.SPA_FORMAT_VIDEO_framerate,
+        no_rate.properties,
+    )
+
+    @test_throws ArgumentError video_format(size=SPA.Rectangle(0, 480))
+    @test_throws ArgumentError video_format(framerate=SPA.Fraction(30, 0))
+    @test_throws ArgumentError video_format(max_framerate=SPA.Fraction(60, 0))
+    @test_throws ArgumentError video_format(pixel_aspect_ratio=SPA.Fraction(1, 0))
+    @test_throws ArgumentError video_format(modifier=big(typemax(Int64)) + 1)
+    @test_throws ArgumentError video_format(views=big(typemax(Int32)) + 1)
+    @test_throws ArgumentError video_format(interlace_mode=-1)
+    @test_throws ArgumentError video_format(id=-1)
+end

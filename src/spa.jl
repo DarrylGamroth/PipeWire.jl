@@ -89,6 +89,7 @@ Pod(value::Int64) = _scalar_pod(UInt32(LibPipeWire.SPA_TYPE_Long), value)
 Pod(value::Float32) = _scalar_pod(UInt32(LibPipeWire.SPA_TYPE_Float), value)
 Pod(value::Float64) = _scalar_pod(UInt32(LibPipeWire.SPA_TYPE_Double), value)
 Pod(value::SPA.Bytes) = _pod_from_body(UInt32(LibPipeWire.SPA_TYPE_Bytes), value.data)
+Pod(value::SPA.Bitmap) = _pod_from_body(UInt32(LibPipeWire.SPA_TYPE_Bitmap), value.data)
 Pod(value::SPA.Fd) = _scalar_pod(UInt32(LibPipeWire.SPA_TYPE_Fd), value.value)
 
 function Pod(value::AbstractString)
@@ -110,6 +111,14 @@ function Pod(value::SPA.Fraction)
     _append_bits!(body, value.num)
     _append_bits!(body, value.denom)
     return _pod_from_body(UInt32(LibPipeWire.SPA_TYPE_Fraction), body)
+end
+
+function Pod(value::SPA.Pointer)
+    body = UInt8[]
+    _append_bits!(body, value.type)
+    _append_bits!(body, UInt32(0))
+    _append_bits!(body, UInt(value.value))
+    return _pod_from_body(UInt32(LibPipeWire.SPA_TYPE_Pointer), body)
 end
 
 function Pod(value::SPA.Array{T}) where {T}
@@ -268,6 +277,14 @@ function pod_value(::Type{SPA.Bytes}, pod::Pod)
     return SPA.Bytes(@view data[(sizeof(LibPipeWire.spa_pod) + 1):end])
 end
 
+function pod_value(::Type{SPA.Bitmap}, pod::Pod)
+    data = pod.data
+    body_size = length(data) - sizeof(LibPipeWire.spa_pod)
+    _check_pod_body(pod, UInt32(LibPipeWire.SPA_TYPE_Bitmap), body_size)
+    body_size > 0 || throw(ArgumentError("an SPA bitmap POD must not be empty"))
+    return SPA.Bitmap(@view data[(sizeof(LibPipeWire.spa_pod) + 1):end])
+end
+
 function pod_value(::Type{SPA.Rectangle}, pod::Pod)
     data = pod.data
     return GC.@preserve data begin
@@ -295,6 +312,22 @@ function pod_value(::Type{SPA.Fraction}, pod::Pod)
             unsafe_load(Ptr{UInt32}(pointer)),
             unsafe_load(Ptr{UInt32}(pointer + sizeof(UInt32))),
         )
+    end
+end
+
+function pod_value(::Type{SPA.Pointer{T}}, pod::Pod) where {T}
+    data = pod.data
+    return GC.@preserve data begin
+        pointer = _pod_body_pointer(
+            pod,
+            UInt32(LibPipeWire.SPA_TYPE_Pointer),
+            2 * sizeof(UInt32) + sizeof(UInt),
+        )
+        pointer_type = unsafe_load(Ptr{UInt32}(pointer))
+        padding = unsafe_load(Ptr{UInt32}(pointer + sizeof(UInt32)))
+        address = unsafe_load(Ptr{UInt}(pointer + 2 * sizeof(UInt32)))
+        iszero(padding) || throw(ArgumentError("an SPA pointer POD has nonzero padding"))
+        SPA.Pointer(pointer_type, Ptr{T}(address))
     end
 end
 
@@ -567,6 +600,7 @@ function pod_value(pod::Pod)
     type == LibPipeWire.SPA_TYPE_Double && return pod_value(Float64, pod)
     type == LibPipeWire.SPA_TYPE_String && return pod_value(String, pod)
     type == LibPipeWire.SPA_TYPE_Bytes && return pod_value(SPA.Bytes, pod)
+    type == LibPipeWire.SPA_TYPE_Bitmap && return pod_value(SPA.Bitmap, pod)
     type == LibPipeWire.SPA_TYPE_Rectangle && return pod_value(SPA.Rectangle, pod)
     type == LibPipeWire.SPA_TYPE_Fraction && return pod_value(SPA.Fraction, pod)
     type == LibPipeWire.SPA_TYPE_Fd && return pod_value(SPA.Fd, pod)
@@ -575,6 +609,7 @@ function pod_value(pod::Pod)
     type == LibPipeWire.SPA_TYPE_Choice && return pod_value(SPA.Choice, pod)
     type == LibPipeWire.SPA_TYPE_Object && return pod_value(SPA.Object, pod)
     type == LibPipeWire.SPA_TYPE_Sequence && return pod_value(SPA.Sequence, pod)
+    type == LibPipeWire.SPA_TYPE_Pointer && return pod_value(SPA.Pointer{Cvoid}, pod)
     throw(ArgumentError("SPA POD type $type is not a supported value"))
 end
 

@@ -33,6 +33,7 @@ using ..PipeWire: Pod
 using ..LibPipeWire
 
 export Array,
+    Bitmap,
     Bytes,
     CHOICE_ENUM,
     CHOICE_FLAGS,
@@ -52,6 +53,7 @@ export Array,
     PROPERTY_HINT_DICT,
     PROPERTY_MANDATORY,
     PROPERTY_READONLY,
+    Pointer,
     Property,
     Rectangle,
     Sequence,
@@ -89,6 +91,32 @@ end
 Base.:(==)(left::Bytes, right::Bytes) = left.data == right.data
 Base.isequal(left::Bytes, right::Bytes) = isequal(left.data, right.data)
 Base.hash(value::Bytes, seed::UInt) = hash(value.data, seed)
+
+"An owned bitmap carried by an SPA POD."
+struct Bitmap
+    data::Vector{UInt8}
+
+    function Bitmap(data)
+        isempty(data) && throw(ArgumentError("an SPA bitmap must not be empty"))
+        return new(Vector{UInt8}(data))
+    end
+end
+
+Base.:(==)(left::Bitmap, right::Bitmap) = left.data == right.data
+Base.isequal(left::Bitmap, right::Bitmap) = isequal(left.data, right.data)
+Base.hash(value::Bitmap, seed::UInt) = hash(value.data, seed)
+
+"A typed borrowed pointer carried by an SPA POD."
+struct Pointer{T}
+    type::UInt32
+    value::Ptr{T}
+
+    function Pointer(type::Integer, value::Ptr{T}) where {T}
+        0 <= type <= typemax(UInt32) ||
+            throw(ArgumentError("SPA pointer type is outside UInt32 range"))
+        return new{T}(UInt32(type), value)
+    end
+end
 
 "An owned homogeneous SPA POD array."
 struct Array{T}

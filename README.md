@@ -180,8 +180,9 @@ end
 ```
 
 The generated `PipeWire.LibPipeWire` module remains available for client APIs
-that do not yet have a managed wrapper. Managed filter APIs and uncommon SPA
-pointer/bitmap POD values are still in progress.
+that do not yet have a managed wrapper. Managed filter APIs are still in
+progress. `SPA.Pointer` is intentionally borrowed and does not keep its pointee
+alive; preserve the owner for every native use of the pointer POD.
 
 `PipeWire` and `PipeWire_jll` are published in
 [`DarrylGamrothRegistry`](https://github.com/DarrylGamroth/PackageRegistry).

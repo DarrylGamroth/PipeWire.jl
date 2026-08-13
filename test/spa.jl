@@ -475,3 +475,45 @@ end
     @test_throws ArgumentError video_format(interlace_mode=-1)
     @test_throws ArgumentError video_format(id=-1)
 end
+
+@testset "bitmap and pointer SPA POD values" begin
+    source = UInt8[0xaa, 0x55]
+    bitmap = SPA.Bitmap(source)
+    source[1] = 0x00
+    bitmap_pod = Pod(bitmap)
+    @test pod_type(bitmap_pod) == PipeWire.LibPipeWire.SPA_TYPE_Bitmap
+    @test pod_value(SPA.Bitmap, bitmap_pod) == SPA.Bitmap(UInt8[0xaa, 0x55])
+    @test pod_value(bitmap_pod) == bitmap
+    @test isconcretetype(SPA.Bitmap)
+    @test all(isconcretetype, fieldtypes(SPA.Bitmap))
+    @test_throws ArgumentError SPA.Bitmap(UInt8[])
+
+    storage = Ref{Int32}(42)
+    pointer = SPA.Pointer(7, Base.unsafe_convert(Ptr{Int32}, storage))
+    pointer_pod = GC.@preserve storage Pod(pointer)
+    decoded = @inferred pod_value(SPA.Pointer{Int32}, pointer_pod)
+    @test decoded == pointer
+    @test pod_type(pointer_pod) == PipeWire.LibPipeWire.SPA_TYPE_Pointer
+    @test pod_value(pointer_pod) == SPA.Pointer(7, Ptr{Cvoid}(pointer.value))
+    @test isconcretetype(typeof(pointer))
+    @test all(isconcretetype, fieldtypes(typeof(pointer)))
+    @test isbitstype(typeof(pointer))
+    @test pod_value_allocations(SPA.Pointer{Int32}, pointer_pod) == 0
+    @test_throws ArgumentError SPA.Pointer(-1, pointer.value)
+
+    nonzero_padding_body = UInt8[]
+    PipeWire._append_bits!(nonzero_padding_body, UInt32(7))
+    PipeWire._append_bits!(nonzero_padding_body, UInt32(1))
+    PipeWire._append_bits!(nonzero_padding_body, UInt(pointer.value))
+    nonzero_padding = PipeWire._pod_from_body(
+        UInt32(PipeWire.LibPipeWire.SPA_TYPE_Pointer),
+        nonzero_padding_body,
+    )
+    @test_throws ArgumentError pod_value(SPA.Pointer{Int32}, nonzero_padding)
+
+    empty_bitmap = PipeWire._pod_from_body(
+        UInt32(PipeWire.LibPipeWire.SPA_TYPE_Bitmap),
+        UInt8[],
+    )
+    @test_throws ArgumentError pod_value(SPA.Bitmap, empty_bitmap)
+end

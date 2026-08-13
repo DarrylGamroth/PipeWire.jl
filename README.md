@@ -13,10 +13,10 @@ The package is being built in layers:
 
 The managed API currently includes main loops, contexts, core connections,
 registry-global snapshots and binding, generic proxies, native-backed
-properties, typed node/port/device/link/metadata proxies, streams, owned SPA
-PODs for raw-audio formats, and mapped stream buffers. Native resources follow
-Julia's `close`/`isopen` conventions and enforce PipeWire's
-parent-before-child lifetime rules.
+properties, typed node/port/device/link/metadata/factory/module/client proxies,
+streams, owned SPA PODs for raw-audio formats, and mapped stream buffers.
+Native resources follow Julia's `close`/`isopen` conventions and enforce
+PipeWire's parent-before-child lifetime rules.
 
 ```julia
 using PipeWire
@@ -130,9 +130,8 @@ end
 ```
 
 The generated `PipeWire.LibPipeWire` module remains available for client APIs
-that do not yet have a managed wrapper. Typed factory/module/client interfaces,
-general SPA POD construction/parsing, and video-format APIs are still in
-progress.
+that do not yet have a managed wrapper. General SPA POD construction/parsing,
+client permission mutation, and video-format APIs are still in progress.
 
 Until `PipeWire_jll` is registered, add its public wrapper repository before
 instantiating:

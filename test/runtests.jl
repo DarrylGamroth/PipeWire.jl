@@ -255,6 +255,59 @@ end
     close(created_properties)
     @test_throws ArgumentError create_object(core, "bad\0factory", Metadata)
 
+    factory_global = first(
+        global_object for global_object in globals(registry) if
+        global_object.type == "PipeWire:Interface:Factory"
+    )
+    module_global = first(
+        global_object for global_object in globals(registry) if
+        global_object.type == "PipeWire:Interface:Module"
+    )
+    client_global = only(
+        global_object for global_object in globals(registry) if
+        global_object.type == "PipeWire:Interface:Client"
+    )
+    factory_infos = FactoryInfo[]
+    module_infos = ModuleInfo[]
+    client_infos = ClientInfo[]
+    permission_events = Tuple{UInt32,Vector{Permission}}[]
+    factory = bind(
+        registry,
+        factory_global,
+        Factory;
+        on_info=(factory, info) -> push!(factory_infos, info),
+    )
+    module_object = bind(
+        registry,
+        module_global,
+        PipeWireModule;
+        on_info=(module_object, info) -> push!(module_infos, info),
+    )
+    client = bind(
+        registry,
+        client_global,
+        Client;
+        on_info=(client, info) -> push!(client_infos, info),
+        on_permissions=(client, index, permissions) ->
+            push!(permission_events, (index, permissions)),
+    )
+    @test all(isconcretetype, fieldtypes(typeof(factory)))
+    @test all(isconcretetype, fieldtypes(typeof(module_object)))
+    @test all(isconcretetype, fieldtypes(typeof(client)))
+    roundtrip(registry)
+    @test only(factory_infos).id == factory_global.id
+    @test !isempty(only(factory_infos).name)
+    @test only(module_infos).id == module_global.id
+    @test !isempty(only(module_infos).name)
+    @test only(client_infos).id == client_global.id
+    get_permissions!(client)
+    roundtrip(registry)
+    @test !isempty(permission_events)
+    @test first(permission_events)[1] == 0
+    close(client)
+    close(module_object)
+    close(factory)
+
     close(registry)
     close(core)
     close(context)

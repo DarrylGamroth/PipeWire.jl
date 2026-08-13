@@ -3,6 +3,9 @@ const _PORT_INTERFACE = "PipeWire:Interface:Port"
 const _DEVICE_INTERFACE = "PipeWire:Interface:Device"
 const _LINK_INTERFACE = "PipeWire:Interface:Link"
 const _METADATA_INTERFACE = "PipeWire:Interface:Metadata"
+const _FACTORY_INTERFACE = "PipeWire:Interface:Factory"
+const _MODULE_INTERFACE = "PipeWire:Interface:Module"
+const _CLIENT_INTERFACE = "PipeWire:Interface:Client"
 const _OBJECT_INTERFACE_VERSION = UInt32(3)
 
 "The input or output direction of a PipeWire port."
@@ -84,6 +87,39 @@ struct LinkInfo
     properties::Dict{String,String}
 end
 
+"A copied factory information snapshot."
+struct FactoryInfo
+    id::UInt32
+    name::String
+    type::String
+    version::UInt32
+    change_mask::UInt64
+    properties::Dict{String,String}
+end
+
+"A copied module information snapshot."
+struct ModuleInfo
+    id::UInt32
+    name::String
+    filename::String
+    args::String
+    change_mask::UInt64
+    properties::Dict{String,String}
+end
+
+"A copied client information snapshot."
+struct ClientInfo
+    id::UInt32
+    change_mask::UInt64
+    properties::Dict{String,String}
+end
+
+"A PipeWire permission entry associating a global ID with a permission mask."
+struct Permission
+    id::UInt32
+    permissions::UInt32
+end
+
 function _copy_param_infos(pointer::Ptr{LibPipeWire.spa_param_info}, count::UInt32)
     result = Vector{ParamInfo}(undef, count)
     for index in eachindex(result)
@@ -151,12 +187,56 @@ function _copy_link_info(pointer::Ptr{LibPipeWire.pw_link_info})
     )
 end
 
+function _copy_factory_info(pointer::Ptr{LibPipeWire.pw_factory_info})
+    pointer == C_NULL && throw(ArgumentError("the factory info pointer is null"))
+    info = unsafe_load(pointer)
+    return FactoryInfo(
+        info.id,
+        info.name == C_NULL ? "" : unsafe_string(info.name),
+        info.type == C_NULL ? "" : unsafe_string(info.type),
+        info.version,
+        info.change_mask,
+        _copy_properties(info.props),
+    )
+end
+
+function _copy_module_info(pointer::Ptr{LibPipeWire.pw_module_info})
+    pointer == C_NULL && throw(ArgumentError("the module info pointer is null"))
+    info = unsafe_load(pointer)
+    return ModuleInfo(
+        info.id,
+        info.name == C_NULL ? "" : unsafe_string(info.name),
+        info.filename == C_NULL ? "" : unsafe_string(info.filename),
+        info.args == C_NULL ? "" : unsafe_string(info.args),
+        info.change_mask,
+        _copy_properties(info.props),
+    )
+end
+
+function _copy_client_info(pointer::Ptr{LibPipeWire.pw_client_info})
+    pointer == C_NULL && throw(ArgumentError("the client info pointer is null"))
+    info = unsafe_load(pointer)
+    return ClientInfo(info.id, info.change_mask, _copy_properties(info.props))
+end
+
+function _copy_permissions(pointer::Ptr{LibPipeWire.pw_permission}, count::UInt32)
+    result = Vector{Permission}(undef, count)
+    for index in eachindex(result)
+        permission = unsafe_load(pointer, index)
+        result[index] = Permission(permission.id, permission.permissions)
+    end
+    return result
+end
+
 for (name, event_type) in (
     (:Node, :(LibPipeWire.pw_node_events)),
     (:Port, :(LibPipeWire.pw_port_events)),
     (:Device, :(LibPipeWire.pw_device_events)),
     (:Link, :(LibPipeWire.pw_link_events)),
     (:Metadata, :(LibPipeWire.pw_metadata_events)),
+    (:Factory, :(LibPipeWire.pw_factory_events)),
+    (:PipeWireModule, :(LibPipeWire.pw_module_events)),
+    (:Client, :(LibPipeWire.pw_client_events)),
 )
     @eval begin
         mutable struct $name{ProxyType<:Proxy,Callbacks}
@@ -211,7 +291,16 @@ An owning typed proxy for a PipeWire metadata store. Construct one with
 """
 Metadata
 
-const ManagedObject = Union{Node,Port,Device,Link,Metadata}
+"An owning typed proxy for a PipeWire factory."
+Factory
+
+"An owning typed proxy for a loaded PipeWire module."
+PipeWireModule
+
+"An owning typed proxy for a connected PipeWire client."
+Client
+
+const ManagedObject = Union{Node,Port,Device,Link,Metadata,Factory,PipeWireModule,Client}
 
 function _invoke_object_callback(object::ManagedObject, ::Val{Field}, args...) where {Field}
     lock(object.callback_lock)
@@ -342,6 +431,56 @@ function _link_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_link_info})::Cvoi
     return nothing
 end
 
+function _factory_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_factory_info})::Cvoid
+    object = _callback_state(data, Factory)
+    try
+        _invoke_object_callback(object, Val(:on_info), _copy_factory_info(info))
+    catch error
+        _record_object_callback_error(object, error)
+    end
+    return nothing
+end
+
+function _module_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_module_info})::Cvoid
+    object = _callback_state(data, PipeWireModule)
+    try
+        _invoke_object_callback(object, Val(:on_info), _copy_module_info(info))
+    catch error
+        _record_object_callback_error(object, error)
+    end
+    return nothing
+end
+
+function _client_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_client_info})::Cvoid
+    object = _callback_state(data, Client)
+    try
+        _invoke_object_callback(object, Val(:on_info), _copy_client_info(info))
+    catch error
+        _record_object_callback_error(object, error)
+    end
+    return nothing
+end
+
+function _client_permissions(
+    data::Ptr{Cvoid},
+    index::UInt32,
+    count::UInt32,
+    permissions::Ptr{LibPipeWire.pw_permission},
+)::Cvoid
+    object = _callback_state(data, Client)
+    try
+        _invoke_object_callback(
+            object,
+            Val(:on_permissions),
+            index,
+            _copy_permissions(permissions, count),
+        )
+    catch error
+        _record_object_callback_error(object, error)
+    end
+    return nothing
+end
+
 function _record_object_callback_error(object::ManagedObject, error)
     lock(object.callback_lock) do
         object.callback_error[] === nothing && (object.callback_error[] = error)
@@ -417,6 +556,10 @@ const _DEVICE_INFO = Ref{Ptr{Cvoid}}(C_NULL)
 const _DEVICE_PARAM = Ref{Ptr{Cvoid}}(C_NULL)
 const _LINK_INFO = Ref{Ptr{Cvoid}}(C_NULL)
 const _METADATA_PROPERTY = Ref{Ptr{Cvoid}}(C_NULL)
+const _FACTORY_INFO = Ref{Ptr{Cvoid}}(C_NULL)
+const _MODULE_INFO = Ref{Ptr{Cvoid}}(C_NULL)
+const _CLIENT_INFO = Ref{Ptr{Cvoid}}(C_NULL)
+const _CLIENT_PERMISSIONS = Ref{Ptr{Cvoid}}(C_NULL)
 
 function _initialize_object_callbacks!()
     _NODE_INFO[] = @cfunction(_node_info, Cvoid, (Ptr{Cvoid}, Ptr{LibPipeWire.pw_node_info}))
@@ -427,6 +570,14 @@ function _initialize_object_callbacks!()
     _DEVICE_PARAM[] = @cfunction(_device_param, Cvoid, (Ptr{Cvoid}, Cint, UInt32, UInt32, UInt32, Ptr{LibPipeWire.spa_pod}))
     _LINK_INFO[] = @cfunction(_link_info, Cvoid, (Ptr{Cvoid}, Ptr{LibPipeWire.pw_link_info}))
     _METADATA_PROPERTY[] = @cfunction(_metadata_property, Cint, (Ptr{Cvoid}, UInt32, Cstring, Cstring, Cstring))
+    _FACTORY_INFO[] = @cfunction(_factory_info, Cvoid, (Ptr{Cvoid}, Ptr{LibPipeWire.pw_factory_info}))
+    _MODULE_INFO[] = @cfunction(_module_info, Cvoid, (Ptr{Cvoid}, Ptr{LibPipeWire.pw_module_info}))
+    _CLIENT_INFO[] = @cfunction(_client_info, Cvoid, (Ptr{Cvoid}, Ptr{LibPipeWire.pw_client_info}))
+    _CLIENT_PERMISSIONS[] = @cfunction(
+        _client_permissions,
+        Cvoid,
+        (Ptr{Cvoid}, UInt32, UInt32, Ptr{LibPipeWire.pw_permission}),
+    )
     return nothing
 end
 
@@ -501,6 +652,56 @@ function _attach_link(proxy::Proxy, on_info)
         pointer_from_objref(object),
     )
     result < 0 && (close(object); throw(PipeWireError(:pw_link_add_listener, result)))
+    finalizer(close, object)
+    return object
+end
+
+function _attach_factory(proxy::Proxy, on_info)
+    listener = Ref(_zero_hook())
+    events = Ref(LibPipeWire.pw_factory_events(UInt32(0), _FACTORY_INFO[]))
+    callbacks = (on_info=on_info,)
+    object = Factory(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
+    result = GC.@preserve object listener events LibPipeWire.pw_factory_add_listener(
+        Ptr{LibPipeWire.pw_factory}(proxy.handle),
+        Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
+        Base.unsafe_convert(Ptr{LibPipeWire.pw_factory_events}, events),
+        pointer_from_objref(object),
+    )
+    result < 0 && (close(object); throw(PipeWireError(:pw_factory_add_listener, result)))
+    finalizer(close, object)
+    return object
+end
+
+function _attach_module(proxy::Proxy, on_info)
+    listener = Ref(_zero_hook())
+    events = Ref(LibPipeWire.pw_module_events(UInt32(0), _MODULE_INFO[]))
+    callbacks = (on_info=on_info,)
+    object = PipeWireModule(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
+    result = GC.@preserve object listener events LibPipeWire.pw_module_add_listener(
+        Ptr{LibPipeWire.pw_module}(proxy.handle),
+        Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
+        Base.unsafe_convert(Ptr{LibPipeWire.pw_module_events}, events),
+        pointer_from_objref(object),
+    )
+    result < 0 && (close(object); throw(PipeWireError(:pw_module_add_listener, result)))
+    finalizer(close, object)
+    return object
+end
+
+function _attach_client(proxy::Proxy, on_info, on_permissions)
+    listener = Ref(_zero_hook())
+    events = Ref(
+        LibPipeWire.pw_client_events(UInt32(0), _CLIENT_INFO[], _CLIENT_PERMISSIONS[]),
+    )
+    callbacks = (on_info=on_info, on_permissions=on_permissions)
+    object = Client(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
+    result = GC.@preserve object listener events LibPipeWire.pw_client_add_listener(
+        Ptr{LibPipeWire.pw_client}(proxy.handle),
+        Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
+        Base.unsafe_convert(Ptr{LibPipeWire.pw_client_events}, events),
+        pointer_from_objref(object),
+    )
+    result < 0 && (close(object); throw(PipeWireError(:pw_client_add_listener, result)))
     finalizer(close, object)
     return object
 end
@@ -599,6 +800,74 @@ function Base.bind(
     proxy_callbacks = _proxy_callback_keywords(on_bound, on_removed, on_done, on_error, on_bound_properties)
     proxy = _typed_proxy(registry, global_object, _LINK_INTERFACE, version; proxy_callbacks...)
     return _attach_link(proxy, on_info)
+end
+
+"""
+    bind(registry, global_object, Factory; callbacks...) -> Factory
+
+Bind a factory global and install a copied `on_info` event callback.
+"""
+function Base.bind(
+    registry::Registry,
+    global_object::Global,
+    ::Type{Factory};
+    version::Integer=min(global_object.version, _OBJECT_INTERFACE_VERSION),
+    on_info=nothing,
+    on_bound=nothing,
+    on_removed=nothing,
+    on_done=nothing,
+    on_error=nothing,
+    on_bound_properties=nothing,
+)
+    proxy_callbacks = _proxy_callback_keywords(on_bound, on_removed, on_done, on_error, on_bound_properties)
+    proxy = _typed_proxy(registry, global_object, _FACTORY_INTERFACE, version; proxy_callbacks...)
+    return _attach_factory(proxy, on_info)
+end
+
+"""
+    bind(registry, global_object, PipeWireModule; callbacks...) -> PipeWireModule
+
+Bind a module global and install a copied `on_info` event callback.
+"""
+function Base.bind(
+    registry::Registry,
+    global_object::Global,
+    ::Type{PipeWireModule};
+    version::Integer=min(global_object.version, _OBJECT_INTERFACE_VERSION),
+    on_info=nothing,
+    on_bound=nothing,
+    on_removed=nothing,
+    on_done=nothing,
+    on_error=nothing,
+    on_bound_properties=nothing,
+)
+    proxy_callbacks = _proxy_callback_keywords(on_bound, on_removed, on_done, on_error, on_bound_properties)
+    proxy = _typed_proxy(registry, global_object, _MODULE_INTERFACE, version; proxy_callbacks...)
+    return _attach_module(proxy, on_info)
+end
+
+"""
+    bind(registry, global_object, Client; callbacks...) -> Client
+
+Bind a client global. `on_info` receives copied client info and
+`on_permissions(client, index, permissions)` receives copied permission entries.
+"""
+function Base.bind(
+    registry::Registry,
+    global_object::Global,
+    ::Type{Client};
+    version::Integer=min(global_object.version, _OBJECT_INTERFACE_VERSION),
+    on_info=nothing,
+    on_permissions=nothing,
+    on_bound=nothing,
+    on_removed=nothing,
+    on_done=nothing,
+    on_error=nothing,
+    on_bound_properties=nothing,
+)
+    proxy_callbacks = _proxy_callback_keywords(on_bound, on_removed, on_done, on_error, on_bound_properties)
+    proxy = _typed_proxy(registry, global_object, _CLIENT_INTERFACE, version; proxy_callbacks...)
+    return _attach_client(proxy, on_info, on_permissions)
 end
 
 function _with_metadata_method(call, object::Metadata, field::Symbol)
@@ -923,4 +1192,61 @@ function clear!(object::Metadata)
     end
     _check_result(:pw_metadata_clear, result)
     return object
+end
+
+"""
+    get_permissions!(client; index=0, count=typemax(UInt32))
+
+Request a range of client permissions. Results arrive through the client's
+`on_permissions` callback. Return `client`.
+"""
+function get_permissions!(
+    client::Client;
+    index::Integer=0,
+    count::Integer=typemax(UInt32),
+)
+    result = _with_object_handle(client, LibPipeWire.pw_client) do handle
+        LibPipeWire.pw_client_get_permissions(handle, UInt32(index), UInt32(count))
+    end
+    _check_result(:pw_client_get_permissions, result)
+    return client
+end
+
+"""
+    update_properties!(client, properties)
+
+Update a client's PipeWire properties and return `client`.
+"""
+function update_properties!(client::Client, properties)
+    result = _with_properties_dict(properties) do dictionary
+        _with_object_handle(client, LibPipeWire.pw_client) do handle
+            LibPipeWire.pw_client_update_properties(handle, dictionary)
+        end
+    end
+    _check_result(:pw_client_update_properties, result)
+    return client
+end
+
+function _native_permissions(permissions)
+    return LibPipeWire.pw_permission[
+        permission isa Permission ?
+        LibPipeWire.pw_permission(permission.id, permission.permissions) :
+        LibPipeWire.pw_permission(UInt32(first(permission)), UInt32(last(permission)))
+        for permission in permissions
+    ]
+end
+
+"""
+    update_permissions!(client, permissions)
+
+Update a client's global-object permissions and return `client`. Each entry may
+be a [`Permission`](@ref) or an `id => mask` pair.
+"""
+function update_permissions!(client::Client, permissions)
+    native = _native_permissions(permissions)
+    result = GC.@preserve native _with_object_handle(client, LibPipeWire.pw_client) do handle
+        LibPipeWire.pw_client_update_permissions(handle, UInt32(length(native)), pointer(native))
+    end
+    _check_result(:pw_client_update_permissions, result)
+    return client
 end

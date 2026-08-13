@@ -14,8 +14,8 @@ The package is being built in layers:
 The managed API currently includes main loops, contexts, core connections,
 registry-global snapshots and binding, generic proxies, native-backed
 properties, typed node/port/device/link/metadata/factory/module/client proxies,
-typed core protocol events and methods, streams, owned SPA PODs for raw-audio
-formats, and mapped stream buffers.
+typed core protocol events and methods, streams, multi-port filters, owned SPA
+PODs for raw-audio and raw-video formats, and mapped buffers.
 Native resources follow Julia's `close`/`isopen` conventions and enforce
 PipeWire's parent-before-child lifetime rules.
 
@@ -179,10 +179,52 @@ finally
 end
 ```
 
+## Multi-port filter
+
+`Filter` provides the managed equivalent of PipeWire's `pw_filter`: add typed
+input and output ports, negotiate each port independently, and process their
+buffers from one callback. Port application data is stored in the concrete
+`FilterPort` type. The warmed callback dispatch itself allocates zero bytes
+when its callable does not allocate. As with streams, Julia callbacks must not
+use `RT_PROCESS`.
+
+```julia
+context = Context()
+core = CoreConnection(context)
+filter = Filter(core, "Julia gain"; on_process=filter -> begin
+    # Dequeue from each port, process the mapped planes, then queue each buffer.
+    # Call process_position(filter) here when graph timing is needed.
+end)
+
+input = add_port!(
+    filter,
+    :input;
+    data=(channel=:left,),
+    flags=FILTER_PORT_MAP_BUFFERS,
+    params=[audio_format(format=Audio.F32, rate=48_000, channels=1)],
+)
+output = add_port!(
+    filter,
+    :output;
+    data=(channel=:left,),
+    flags=FILTER_PORT_MAP_BUFFERS,
+    params=[audio_format(format=Audio.F32, rate=48_000, channels=1)],
+)
+
+try
+    connect!(filter)
+    run!(filter)
+finally
+    close(filter) # also invalidates its ports
+    close(core)
+    close(context)
+end
+```
+
 The generated `PipeWire.LibPipeWire` module remains available for client APIs
-that do not yet have a managed wrapper. Managed filter APIs are still in
-progress. `SPA.Pointer` is intentionally borrowed and does not keep its pointee
-alive; preserve the owner for every native use of the pointer POD.
+that do not yet have a managed wrapper. `SPA.Pointer` is intentionally borrowed
+and does not keep its pointee alive; preserve the owner for every native use of
+the pointer POD.
 
 `PipeWire` and `PipeWire_jll` are published in
 [`DarrylGamrothRegistry`](https://github.com/DarrylGamroth/PackageRegistry).

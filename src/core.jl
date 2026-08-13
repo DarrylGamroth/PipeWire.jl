@@ -157,6 +157,7 @@ mutable struct CoreConnection{Callbacks}
     state_lock::ReentrantLock
     registry_count::Int
     stream_count::Int
+    filter_count::Int
     proxy_count::Int
     listener::Base.RefValue{LibPipeWire.spa_hook}
     events::Base.RefValue{LibPipeWire.pw_core_events}
@@ -419,8 +420,8 @@ keywords for the remaining core protocol events are `on_ping`, `on_remove_id`,
 the bound-properties callback receives copied properties. Callback types are
 part of the concrete `CoreConnection` type.
 
-Close every child [`Registry`](@ref), [`Stream`](@ref), and core-created proxy
-before closing the connection.
+Close every child [`Registry`](@ref), [`Stream`](@ref), [`Filter`](@ref), and
+core-created proxy before closing the connection.
 """
 function CoreConnection(
     context::Context;
@@ -472,6 +473,7 @@ function CoreConnection(
         handle,
         context,
         ReentrantLock(),
+        0,
         0,
         0,
         0,
@@ -527,6 +529,12 @@ function Base.close(core::CoreConnection)
                 :open_streams,
             ),
         )
+        core.filter_count == 0 || throw(
+            InvalidStateException(
+                "cannot close a PipeWire core connection while filters are open",
+                :open_filters,
+            ),
+        )
         core.proxy_count == 0 || throw(
             InvalidStateException(
                 "cannot close a PipeWire core connection while created proxies are open",
@@ -546,6 +554,22 @@ function Base.close(core::CoreConnection)
     _release_core(core.context)
     _check_result(:pw_core_disconnect, result)
     return nothing
+end
+
+function _retain_filter(core::CoreConnection)
+    return lock(core.state_lock) do
+        handle = _require_open(core)
+        core.filter_count += 1
+        return handle
+    end
+end
+
+function _release_filter(core::CoreConnection)
+    return lock(core.state_lock) do
+        core.filter_count -= 1
+        @assert core.filter_count >= 0
+        return nothing
+    end
 end
 
 function _retain_stream(core::CoreConnection)
@@ -722,8 +746,8 @@ end
 
 Restart the core protocol conversation and return `core`. PipeWire destroys
 all server resources owned by this client except the core and client resource,
-so this operation is rejected while managed registries, streams, or created
-proxies remain open.
+so this operation is rejected while managed registries, streams, filters, or
+created proxies remain open.
 """
 function hello!(core::CoreConnection; version::Integer=_PW_VERSION_CORE)
     requested_version = _core_uint32(version, "core version")
@@ -731,7 +755,12 @@ function hello!(core::CoreConnection; version::Integer=_PW_VERSION_CORE)
         throw(ArgumentError("the requested core version is not supported"))
     result = lock(core.state_lock) do
         _require_open(core)
-        (core.registry_count == 0 && core.stream_count == 0 && core.proxy_count == 0) ||
+        (
+            core.registry_count == 0 &&
+            core.stream_count == 0 &&
+            core.filter_count == 0 &&
+            core.proxy_count == 0
+        ) ||
             throw(
                 InvalidStateException(
                     "cannot restart the core protocol while managed child resources are open",

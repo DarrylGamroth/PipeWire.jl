@@ -1,0 +1,379 @@
+"""
+    Pod(data)
+
+An owned SPA POD value. The constructor copies `data` and validates the POD
+header. `Pod` values keep format parameters alive while they are passed to
+PipeWire.
+"""
+struct Pod
+    data::Vector{UInt8}
+
+    function Pod(data::AbstractVector{UInt8})
+        length(data) >= sizeof(LibPipeWire.spa_pod) ||
+            throw(ArgumentError("an SPA POD must contain a complete header"))
+        owned = Vector{UInt8}(data)
+        header = GC.@preserve owned unsafe_load(Ptr{LibPipeWire.spa_pod}(pointer(owned)))
+        header.size < (1 << 20) || throw(ArgumentError("the SPA POD body is too large"))
+        total_size = sizeof(LibPipeWire.spa_pod) + Int(header.size)
+        total_size <= length(owned) || throw(ArgumentError("the SPA POD body is truncated"))
+        resize!(owned, total_size)
+        return new(owned)
+    end
+end
+
+Base.:(==)(left::Pod, right::Pod) = left.data == right.data
+Base.isequal(left::Pod, right::Pod) = isequal(left.data, right.data)
+Base.hash(value::Pod, seed::UInt) = hash(value.data, seed)
+Base.sizeof(pod::Pod) = length(pod.data)
+
+"SPA POD value types that need wrappers to preserve their wire-level meaning."
+module SPA
+
+using ..PipeWire: Pod
+using ..LibPipeWire
+
+export Array,
+    Bytes,
+    CHOICE_ENUM,
+    CHOICE_FLAGS,
+    CHOICE_NONE,
+    CHOICE_RANGE,
+    CHOICE_STEP,
+    Choice,
+    ChoiceKind,
+    Control,
+    Fd,
+    Fraction,
+    Id,
+    Object,
+    PROPERTY_DONT_FIXATE,
+    PROPERTY_DROP,
+    PROPERTY_HARDWARE,
+    PROPERTY_HINT_DICT,
+    PROPERTY_MANDATORY,
+    PROPERTY_READONLY,
+    Property,
+    Rectangle,
+    Sequence,
+    Struct
+
+"An enumerated SPA POD ID."
+struct Id
+    value::UInt32
+
+    function Id(value::Integer)
+        0 <= value <= typemax(UInt32) ||
+            throw(ArgumentError("SPA ID is outside UInt32 range"))
+        return new(UInt32(value))
+    end
+end
+
+"A file descriptor value carried by an SPA POD."
+struct Fd
+    value::Int64
+
+    function Fd(value::Integer)
+        typemin(Int64) <= value <= typemax(Int64) ||
+            throw(ArgumentError("SPA file descriptor is outside Int64 range"))
+        return new(Int64(value))
+    end
+end
+
+"An owned byte sequence carried by an SPA POD."
+struct Bytes
+    data::Vector{UInt8}
+
+    Bytes(data) = new(Vector{UInt8}(data))
+end
+
+Base.:(==)(left::Bytes, right::Bytes) = left.data == right.data
+Base.isequal(left::Bytes, right::Bytes) = isequal(left.data, right.data)
+Base.hash(value::Bytes, seed::UInt) = hash(value.data, seed)
+
+"An owned homogeneous SPA POD array."
+struct Array{T}
+    values::Vector{T}
+
+    function Array(values::AbstractVector{T}) where {T}
+        isconcretetype(T) || throw(ArgumentError("an SPA array element type must be concrete"))
+        return new{T}(Vector{T}(values))
+    end
+
+    function Array{T}(values::Vector{T}, ::Nothing) where {T}
+        return new{T}(values)
+    end
+end
+
+Base.:(==)(left::Array, right::Array) = left.values == right.values
+Base.isequal(left::Array, right::Array) = isequal(left.values, right.values)
+Base.hash(value::Array, seed::UInt) = hash(value.values, seed)
+
+_owned_array(values::Vector{T}) where {T} = Array{T}(values, nothing)
+
+@enum ChoiceKind::UInt32 begin
+    CHOICE_NONE = LibPipeWire.SPA_CHOICE_None
+    CHOICE_RANGE = LibPipeWire.SPA_CHOICE_Range
+    CHOICE_STEP = LibPipeWire.SPA_CHOICE_Step
+    CHOICE_ENUM = LibPipeWire.SPA_CHOICE_Enum
+    CHOICE_FLAGS = LibPipeWire.SPA_CHOICE_Flags
+end
+
+function _check_choice_length(kind::ChoiceKind, length::Int)
+    if kind == CHOICE_ENUM
+        length >= 2 || throw(
+            ArgumentError("SPA choice kind $kind requires at least 2 values"),
+        )
+        return nothing
+    end
+    required = kind == CHOICE_RANGE ? 3 : kind == CHOICE_STEP ? 4 : 1
+    length == required || throw(
+        ArgumentError("SPA choice kind $kind requires exactly $required value(s)"),
+    )
+    return nothing
+end
+
+"An owned homogeneous SPA POD choice."
+struct Choice{T}
+    kind::ChoiceKind
+    flags::UInt32
+    values::Vector{T}
+
+    function Choice(
+        kind::ChoiceKind,
+        values::AbstractVector{T};
+        flags::Integer=0,
+    ) where {T}
+        isconcretetype(T) || throw(ArgumentError("an SPA choice value type must be concrete"))
+        0 <= flags <= typemax(UInt32) ||
+            throw(ArgumentError("SPA choice flags are outside UInt32 range"))
+        _check_choice_length(kind, length(values))
+        return new{T}(kind, UInt32(flags), Vector{T}(values))
+    end
+
+    function Choice{T}(
+        kind::ChoiceKind,
+        flags::UInt32,
+        values::Vector{T},
+        ::Nothing,
+    ) where {T}
+        return new{T}(kind, flags, values)
+    end
+end
+
+Base.:(==)(left::Choice, right::Choice) =
+    left.kind == right.kind && left.flags == right.flags && left.values == right.values
+Base.isequal(left::Choice, right::Choice) =
+    isequal(left.kind, right.kind) &&
+    isequal(left.flags, right.flags) &&
+    isequal(left.values, right.values)
+Base.hash(value::Choice, seed::UInt) = hash((value.kind, value.flags, value.values), seed)
+
+function _owned_choice(kind::ChoiceKind, flags::UInt32, values::Vector{T}) where {T}
+    _check_choice_length(kind, length(values))
+    return Choice{T}(kind, flags, values, nothing)
+end
+
+"A width and height carried by an SPA POD."
+struct Rectangle
+    width::UInt32
+    height::UInt32
+
+    function Rectangle(width::Integer, height::Integer)
+        0 <= width <= typemax(UInt32) ||
+            throw(ArgumentError("SPA rectangle width is outside UInt32 range"))
+        0 <= height <= typemax(UInt32) ||
+            throw(ArgumentError("SPA rectangle height is outside UInt32 range"))
+        return new(UInt32(width), UInt32(height))
+    end
+end
+
+"A numerator and denominator carried by an SPA POD."
+struct Fraction
+    num::UInt32
+    denom::UInt32
+
+    function Fraction(num::Integer, denom::Integer)
+        0 <= num <= typemax(UInt32) ||
+            throw(ArgumentError("SPA fraction numerator is outside UInt32 range"))
+        0 <= denom <= typemax(UInt32) ||
+            throw(ArgumentError("SPA fraction denominator is outside UInt32 range"))
+        return new(UInt32(num), UInt32(denom))
+    end
+end
+
+"An owned heterogeneous SPA POD struct."
+struct Struct
+    values::Vector{Pod}
+
+    Struct(values) = new(collect(Pod, values))
+
+    Struct(values::Vector{Pod}, ::Nothing) = new(values)
+end
+
+Struct(values::Pod...) = Struct(values)
+Base.:(==)(left::Struct, right::Struct) = left.values == right.values
+Base.isequal(left::Struct, right::Struct) = isequal(left.values, right.values)
+Base.hash(value::Struct, seed::UInt) = hash(value.values, seed)
+
+_owned_struct(values::Vector{Pod}) = Struct(values, nothing)
+
+const PROPERTY_READONLY = UInt32(1 << 0)
+const PROPERTY_HARDWARE = UInt32(1 << 1)
+const PROPERTY_HINT_DICT = UInt32(1 << 2)
+const PROPERTY_MANDATORY = UInt32(1 << 3)
+const PROPERTY_DONT_FIXATE = UInt32(1 << 4)
+const PROPERTY_DROP = UInt32(1 << 5)
+
+"An owned property carried by an SPA POD object."
+struct Property
+    key::UInt32
+    flags::UInt32
+    value::Pod
+
+    function Property(key::Integer, value::Pod; flags::Integer=0)
+        0 <= key <= typemax(UInt32) ||
+            throw(ArgumentError("SPA property key is outside UInt32 range"))
+        0 <= flags <= typemax(UInt32) ||
+            throw(ArgumentError("SPA property flags are outside UInt32 range"))
+        return new(UInt32(key), UInt32(flags), value)
+    end
+end
+
+Property(key::Integer, value; flags::Integer=0) = Property(key, Pod(value); flags=flags)
+Base.:(==)(left::Property, right::Property) =
+    left.key == right.key && left.flags == right.flags && left.value == right.value
+Base.isequal(left::Property, right::Property) =
+    isequal(left.key, right.key) &&
+    isequal(left.flags, right.flags) &&
+    isequal(left.value, right.value)
+Base.hash(value::Property, seed::UInt) = hash((value.key, value.flags, value.value), seed)
+
+"An owned SPA POD object."
+struct Object
+    type::UInt32
+    id::UInt32
+    properties::Vector{Property}
+
+    function Object(type::Integer, id::Integer, properties)
+        0 <= type <= typemax(UInt32) ||
+            throw(ArgumentError("SPA object type is outside UInt32 range"))
+        0 <= id <= typemax(UInt32) ||
+            throw(ArgumentError("SPA object ID is outside UInt32 range"))
+        return new(UInt32(type), UInt32(id), collect(Property, properties))
+    end
+
+    function Object(
+        type::UInt32,
+        id::UInt32,
+        properties::Vector{Property},
+        ::Nothing,
+    )
+        return new(type, id, properties)
+    end
+end
+
+Object(type::Integer, id::Integer, properties::Property...) = Object(type, id, properties)
+Base.:(==)(left::Object, right::Object) =
+    left.type == right.type && left.id == right.id && left.properties == right.properties
+Base.isequal(left::Object, right::Object) =
+    isequal(left.type, right.type) &&
+    isequal(left.id, right.id) &&
+    isequal(left.properties, right.properties)
+Base.hash(value::Object, seed::UInt) = hash((value.type, value.id, value.properties), seed)
+
+_owned_object(type::UInt32, id::UInt32, properties::Vector{Property}) =
+    Object(type, id, properties, nothing)
+
+"An owned timed control carried by an SPA POD sequence."
+struct Control
+    offset::UInt32
+    type::UInt32
+    value::Pod
+
+    function Control(offset::Integer, type::Integer, value::Pod)
+        0 <= offset <= typemax(UInt32) ||
+            throw(ArgumentError("SPA control offset is outside UInt32 range"))
+        0 <= type <= typemax(UInt32) ||
+            throw(ArgumentError("SPA control type is outside UInt32 range"))
+        return new(UInt32(offset), UInt32(type), value)
+    end
+end
+
+Control(offset::Integer, type::Integer, value) = Control(offset, type, Pod(value))
+Base.:(==)(left::Control, right::Control) =
+    left.offset == right.offset && left.type == right.type && left.value == right.value
+Base.isequal(left::Control, right::Control) =
+    isequal(left.offset, right.offset) &&
+    isequal(left.type, right.type) &&
+    isequal(left.value, right.value)
+Base.hash(value::Control, seed::UInt) = hash((value.offset, value.type, value.value), seed)
+
+"An owned SPA POD sequence of timed controls."
+struct Sequence
+    unit::UInt32
+    controls::Vector{Control}
+
+    function Sequence(unit::Integer, controls)
+        0 <= unit <= typemax(UInt32) ||
+            throw(ArgumentError("SPA sequence unit is outside UInt32 range"))
+        return new(UInt32(unit), collect(Control, controls))
+    end
+
+    function Sequence(unit::UInt32, controls::Vector{Control}, ::Nothing)
+        return new(unit, controls)
+    end
+end
+
+Sequence(unit::Integer, controls::Control...) = Sequence(unit, controls)
+Base.:(==)(left::Sequence, right::Sequence) =
+    left.unit == right.unit && left.controls == right.controls
+Base.isequal(left::Sequence, right::Sequence) =
+    isequal(left.unit, right.unit) && isequal(left.controls, right.controls)
+Base.hash(value::Sequence, seed::UInt) = hash((value.unit, value.controls), seed)
+
+_owned_sequence(unit::UInt32, controls::Vector{Control}) = Sequence(unit, controls, nothing)
+
+end # module SPA
+
+"""
+Audio sample formats and channel positions used by [`audio_format`](@ref).
+
+For example, `Audio.F32` is native-endian 32-bit floating-point audio and
+`Audio.FL`/`Audio.FR` are the front-left and front-right channel positions.
+"""
+module Audio
+
+using ..LibPipeWire
+
+@enum Format::UInt32 begin
+    UNKNOWN = LibPipeWire.SPA_AUDIO_FORMAT_UNKNOWN
+    S8 = LibPipeWire.SPA_AUDIO_FORMAT_S8
+    U8 = LibPipeWire.SPA_AUDIO_FORMAT_U8
+    S16 = LibPipeWire.SPA_AUDIO_FORMAT_S16
+    S24 = LibPipeWire.SPA_AUDIO_FORMAT_S24
+    S32 = LibPipeWire.SPA_AUDIO_FORMAT_S32
+    F32 = LibPipeWire.SPA_AUDIO_FORMAT_F32
+    F64 = LibPipeWire.SPA_AUDIO_FORMAT_F64
+    U8P = LibPipeWire.SPA_AUDIO_FORMAT_U8P
+    S16P = LibPipeWire.SPA_AUDIO_FORMAT_S16P
+    S24P = LibPipeWire.SPA_AUDIO_FORMAT_S24P
+    S32P = LibPipeWire.SPA_AUDIO_FORMAT_S32P
+    F32P = LibPipeWire.SPA_AUDIO_FORMAT_F32P
+    F64P = LibPipeWire.SPA_AUDIO_FORMAT_F64P
+end
+
+@enum Channel::UInt32 begin
+    CHANNEL_UNKNOWN = LibPipeWire.SPA_AUDIO_CHANNEL_UNKNOWN
+    NA = LibPipeWire.SPA_AUDIO_CHANNEL_NA
+    MONO = LibPipeWire.SPA_AUDIO_CHANNEL_MONO
+    FL = LibPipeWire.SPA_AUDIO_CHANNEL_FL
+    FR = LibPipeWire.SPA_AUDIO_CHANNEL_FR
+    FC = LibPipeWire.SPA_AUDIO_CHANNEL_FC
+    LFE = LibPipeWire.SPA_AUDIO_CHANNEL_LFE
+    SL = LibPipeWire.SPA_AUDIO_CHANNEL_SL
+    SR = LibPipeWire.SPA_AUDIO_CHANNEL_SR
+    RL = LibPipeWire.SPA_AUDIO_CHANNEL_RL
+    RR = LibPipeWire.SPA_AUDIO_CHANNEL_RR
+end
+
+end # module Audio

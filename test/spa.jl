@@ -190,7 +190,7 @@ end
                 SPA.Fraction(1, 1),
             ],
         ),
-        SPA.Choice(SPA.CHOICE_FLAGS, [SPA.Fd(-1), SPA.Fd(3)]),
+        SPA.Choice(SPA.CHOICE_FLAGS, [SPA.Fd(3)]),
     )
 
     for choice in choices
@@ -211,10 +211,15 @@ end
     @test @inferred(pod_value(SPA.Choice{Int32}, choice_pod)) == choice
     @test_throws ArgumentError pod_value(SPA.Choice{Int64}, choice_pod)
     @test_throws ArgumentError SPA.Choice(SPA.CHOICE_NONE, Int32[])
+    @test_throws ArgumentError SPA.Choice(SPA.CHOICE_NONE, Int32[1, 2])
     @test_throws ArgumentError SPA.Choice(SPA.CHOICE_RANGE, Int32[1, 2])
+    @test_throws ArgumentError SPA.Choice(SPA.CHOICE_RANGE, Int32[1, 2, 3, 4])
     @test_throws ArgumentError SPA.Choice(SPA.CHOICE_STEP, Int32[1, 2, 3])
+    @test_throws ArgumentError SPA.Choice(SPA.CHOICE_STEP, Int32[1, 2, 3, 4, 5])
     @test_throws ArgumentError SPA.Choice(SPA.CHOICE_ENUM, Int32[])
+    @test_throws ArgumentError SPA.Choice(SPA.CHOICE_ENUM, Int32[1])
     @test_throws ArgumentError SPA.Choice(SPA.CHOICE_FLAGS, Int32[])
+    @test_throws ArgumentError SPA.Choice(SPA.CHOICE_FLAGS, Int32[1, 2])
     @test_throws ArgumentError SPA.Choice(SPA.CHOICE_NONE, Real[1])
     @test_throws ArgumentError SPA.Choice(SPA.CHOICE_NONE, Int32[1]; flags=-1)
     @test_throws ArgumentError Pod(SPA.Choice(SPA.CHOICE_NONE, ["not fixed-size"]))
@@ -327,4 +332,72 @@ end
     @test_throws ArgumentError pod_value(SPA.Object, missing_object_header)
     @test_throws ArgumentError pod_value(SPA.Object, partial_property)
     @test_throws ArgumentError pod_value(SPA.Object, truncated_value)
+end
+
+@testset "sequence SPA POD values" begin
+    sequence = SPA.Sequence(
+        1,
+        SPA.Control(0, 2, SPA.Bytes(UInt8[0x90, 0x40, 0x7f])),
+        SPA.Control(128, 3, Float32(0.5)),
+        SPA.Control(256, 4, SPA.Object(1, 2, SPA.Property(3, Int32(4)))),
+    )
+    pod = Pod(sequence)
+    @test pod_type(pod) == PipeWire.LibPipeWire.SPA_TYPE_Sequence
+    decoded = @inferred pod_value(SPA.Sequence, pod)
+    @test decoded == sequence
+    @test pod_value(pod) == sequence
+    @test isconcretetype(SPA.Control)
+    @test all(isconcretetype, fieldtypes(SPA.Control))
+    @test isconcretetype(SPA.Sequence)
+    @test all(isconcretetype, fieldtypes(SPA.Sequence))
+    @test pod_value(SPA.Bytes, decoded.controls[1].value) ==
+          SPA.Bytes(UInt8[0x90, 0x40, 0x7f])
+    @test pod_value(Float32, decoded.controls[2].value) == 0.5f0
+    @test pod_value(SPA.Object, decoded.controls[3].value) ==
+          SPA.Object(1, 2, SPA.Property(3, Int32(4)))
+
+    controls = [SPA.Control(0, 1, Int32(2))]
+    copied = SPA.Sequence(1, controls)
+    controls[1] = SPA.Control(0, 1, Int32(9))
+    @test pod_value(Int32, copied.controls[1].value) == 2
+
+    @test_throws ArgumentError SPA.Control(-1, 1, Int32(1))
+    @test_throws ArgumentError SPA.Control(1, -1, Int32(1))
+    @test_throws ArgumentError SPA.Sequence(-1, SPA.Control[])
+
+    missing_sequence_header = PipeWire._pod_from_body(
+        UInt32(PipeWire.LibPipeWire.SPA_TYPE_Sequence),
+        UInt8[],
+    )
+    nonzero_padding_body = UInt8[]
+    PipeWire._append_bits!(nonzero_padding_body, UInt32(1))
+    PipeWire._append_bits!(nonzero_padding_body, UInt32(1))
+    nonzero_padding = PipeWire._pod_from_body(
+        UInt32(PipeWire.LibPipeWire.SPA_TYPE_Sequence),
+        nonzero_padding_body,
+    )
+    partial_control_body = UInt8[]
+    PipeWire._append_bits!(partial_control_body, UInt32(1))
+    PipeWire._append_bits!(partial_control_body, UInt32(0))
+    push!(partial_control_body, 0x01)
+    partial_control = PipeWire._pod_from_body(
+        UInt32(PipeWire.LibPipeWire.SPA_TYPE_Sequence),
+        partial_control_body,
+    )
+    truncated_control_body = UInt8[]
+    PipeWire._append_bits!(truncated_control_body, UInt32(1))
+    PipeWire._append_bits!(truncated_control_body, UInt32(0))
+    PipeWire._append_bits!(truncated_control_body, UInt32(0))
+    PipeWire._append_bits!(truncated_control_body, UInt32(2))
+    PipeWire._append_bits!(truncated_control_body, UInt32(8))
+    PipeWire._append_bits!(truncated_control_body, UInt32(PipeWire.LibPipeWire.SPA_TYPE_Long))
+    PipeWire._append_bits!(truncated_control_body, Int32(1))
+    truncated_control = PipeWire._pod_from_body(
+        UInt32(PipeWire.LibPipeWire.SPA_TYPE_Sequence),
+        truncated_control_body,
+    )
+    @test_throws ArgumentError pod_value(SPA.Sequence, missing_sequence_header)
+    @test_throws ArgumentError pod_value(SPA.Sequence, nonzero_padding)
+    @test_throws ArgumentError pod_value(SPA.Sequence, partial_control)
+    @test_throws ArgumentError pod_value(SPA.Sequence, truncated_control)
 end

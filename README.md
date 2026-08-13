@@ -105,7 +105,8 @@ format = SPA.Object(
 The scalar API covers `None`, boolean, ID, 32- and 64-bit integer, 32- and
 64-bit floating-point, string, bytes, rectangle, fraction, and file-descriptor
 PODs. Homogeneous arrays, heterogeneous structs, choices, and objects with
-owned properties are also supported. Sequence decoding is still in progress.
+owned properties are also supported. Timed control sequences use concrete
+`SPA.Sequence` and `SPA.Control` values.
 
 `with_registry` connects to the default PipeWire daemon. For an embedded
 in-process core, use `with_registry(self=true)`.

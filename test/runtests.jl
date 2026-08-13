@@ -167,6 +167,92 @@ end
     close(context)
 end
 
+@testset "typed PipeWire objects" begin
+    context = Context()
+    core = CoreConnection(context; self=true)
+    registry = Registry(core)
+    roundtrip(registry)
+
+    metadata_global = only(
+        global_object for global_object in globals(registry) if
+        global_object.type == "PipeWire:Interface:Metadata"
+    )
+    property_events = Tuple{
+        UInt32,
+        Union{Nothing,String},
+        Union{Nothing,String},
+        Union{Nothing,String},
+    }[]
+    metadata = bind(
+        registry,
+        metadata_global,
+        Metadata;
+        on_property=(metadata, subject, key, type, value) ->
+            push!(property_events, (subject, key, type, value)),
+    )
+
+    @test isopen(metadata)
+    @test isconcretetype(typeof(metadata))
+    @test all(isconcretetype, fieldtypes(typeof(metadata)))
+    @test interface_type(metadata) == metadata_global.type
+    @test_throws InvalidStateException close(registry)
+
+    roundtrip(metadata)
+    initial_event_count = length(property_events)
+    set_property!(
+        metadata,
+        0,
+        "pipewire.jl.test";
+        type="Spa:String:JSON",
+        value="true",
+    )
+    roundtrip(metadata)
+    @test length(property_events) == initial_event_count + 1
+    @test property_events[end] ==
+          (UInt32(0), "pipewire.jl.test", "Spa:String:JSON", "true")
+
+    set_property!(metadata, 0, "pipewire.jl.test")
+    roundtrip(metadata)
+    @test property_events[end] == (UInt32(0), "pipewire.jl.test", nothing, nothing)
+    @test_throws ArgumentError set_property!(metadata, 0, "bad\0key"; value="x")
+    @test_throws ArgumentError bind(registry, metadata_global, Node)
+
+    close(metadata)
+    @test !isopen(metadata)
+    close(registry)
+    close(core)
+    close(context)
+
+    node_error = "node failed"
+    node_native = Ref(
+        PipeWire.LibPipeWire.pw_node_info(
+            UInt32(42),
+            UInt32(8),
+            UInt32(9),
+            UInt64(31),
+            UInt32(2),
+            UInt32(3),
+            PipeWire.LibPipeWire.PW_NODE_STATE_ERROR,
+            pointer(node_error),
+            C_NULL,
+            C_NULL,
+            UInt32(0),
+        ),
+    )
+    info = GC.@preserve node_error node_native PipeWire._copy_node_info(
+        Base.unsafe_convert(Ptr{PipeWire.LibPipeWire.pw_node_info}, node_native),
+    )
+    @test info.id == 42
+    @test info.max_input_ports == 8
+    @test info.max_output_ports == 9
+    @test info.n_input_ports == 2
+    @test info.n_output_ports == 3
+    @test info.state == PipeWire.NODE_STATE_ERROR
+    @test info.error == "node failed"
+    @test isempty(info.properties)
+    @test isempty(info.params)
+end
+
 @testset "managed stream" begin
     context = Context()
     connection_properties = Properties(Dict("application.name" => "PipeWire.jl tests"))

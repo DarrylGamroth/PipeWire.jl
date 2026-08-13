@@ -255,14 +255,17 @@ function Base.close(proxy::Proxy)
     return nothing
 end
 
+"Return the PipeWire interface type name implemented by a proxy."
 interface_type(proxy::Proxy) = proxy.interface_type
 
+"Return the local proxy ID assigned by PipeWire."
 function proxy_id(proxy::Proxy)
     return lock(proxy.state_lock) do
         LibPipeWire.pw_proxy_get_id(_require_open(proxy))
     end
 end
 
+"Return the server global ID to which a proxy was bound."
 function bound_id(proxy::Proxy)
     return lock(proxy.callback_lock) do
         proxy.global_id

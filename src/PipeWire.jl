@@ -2,12 +2,25 @@ module PipeWire
 
 export CoreConnection,
     Context,
+    Device,
+    DeviceInfo,
+    Direction,
     Global,
+    Link,
+    LinkInfo,
+    LinkState,
     MainLoop,
+    Metadata,
+    Node,
+    NodeInfo,
+    NodeState,
+    ParamInfo,
     PipeWireError,
     Pod,
     Properties,
     Proxy,
+    Port,
+    PortInfo,
     Registry,
     Stream,
     StreamBuffer,
@@ -30,6 +43,7 @@ export CoreConnection,
     dequeue_buffer!,
     disconnect!,
     destroy_global!,
+    enum_params!,
     flush!,
     globals,
     bound_id,
@@ -46,8 +60,13 @@ export CoreConnection,
     run!,
     set_active!,
     set_chunk!,
+    set_param!,
+    set_property!,
+    send_command!,
     stream_state,
+    subscribe_params!,
     trigger_process!,
+    clear!,
     writable_bytes,
     with_main_loop,
     with_registry
@@ -58,6 +77,7 @@ include("properties.jl")
 include("core.jl")
 include("proxy.jl")
 include("spa.jl")
+include("objects.jl")
 include("stream.jl")
 
 """
@@ -70,6 +90,7 @@ library_version() = VersionNumber(unsafe_string(LibPipeWire.pw_get_library_versi
 function __init__()
     _initialize_callbacks!()
     _initialize_proxy_callbacks!()
+    _initialize_object_callbacks!()
     _initialize_stream_callbacks!()
     return nothing
 end

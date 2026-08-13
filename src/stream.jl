@@ -1,9 +1,16 @@
+"Automatically connect a stream to a compatible target."
 const STREAM_AUTOCONNECT = LibPipeWire.PW_STREAM_FLAG_AUTOCONNECT
+"Create a stream in the inactive state."
 const STREAM_INACTIVE = LibPipeWire.PW_STREAM_FLAG_INACTIVE
+"Request memory-mapped stream buffers."
 const STREAM_MAP_BUFFERS = LibPipeWire.PW_STREAM_FLAG_MAP_BUFFERS
+"Make a stream a graph driver when permitted."
 const STREAM_DRIVER = LibPipeWire.PW_STREAM_FLAG_DRIVER
+"Disable format conversion for a stream."
 const STREAM_NO_CONVERT = LibPipeWire.PW_STREAM_FLAG_NO_CONVERT
+"Require exclusive access to the stream target."
 const STREAM_EXCLUSIVE = LibPipeWire.PW_STREAM_FLAG_EXCLUSIVE
+"Enable explicit stream processing triggers."
 const STREAM_TRIGGER = LibPipeWire.PW_STREAM_FLAG_TRIGGER
 const _PW_ID_ANY = typemax(UInt32)
 
@@ -260,6 +267,7 @@ function Base.close(stream::Stream)
     return nothing
 end
 
+"Return the current native state of `stream`, throwing a reported stream error."
 function stream_state(stream::Stream)
     _check_callback_error(stream)
     error_pointer = Ref{Cstring}(C_NULL)
@@ -273,6 +281,7 @@ function stream_state(stream::Stream)
     return value
 end
 
+"Return the bound PipeWire node ID for `stream`."
 function node_id(stream::Stream)
     _check_callback_error(stream)
     return lock(stream.state_lock) do
@@ -280,6 +289,11 @@ function node_id(stream::Stream)
     end
 end
 
+"""
+    connect!(stream, direction; target=typemax(UInt32), flags=..., params=())
+
+Connect a stream in the `:input` or `:output` direction and return it.
+"""
 function connect!(
     stream::Stream,
     direction::Symbol;
@@ -324,6 +338,7 @@ function connect!(
     return stream
 end
 
+"Disconnect `stream` and return it."
 function disconnect!(stream::Stream)
     result = lock(stream.state_lock) do
         handle = _require_open(stream)
@@ -336,6 +351,7 @@ function disconnect!(stream::Stream)
     return stream
 end
 
+"Set whether `stream` is active and return it."
 function set_active!(stream::Stream, active::Bool=true)
     _check_callback_error(stream)
     result = lock(stream.state_lock) do
@@ -345,6 +361,7 @@ function set_active!(stream::Stream, active::Bool=true)
     return stream
 end
 
+"Flush queued buffers, optionally draining them first, and return `stream`."
 function flush!(stream::Stream; drain::Bool=false)
     _check_callback_error(stream)
     result = lock(stream.state_lock) do
@@ -354,6 +371,7 @@ function flush!(stream::Stream; drain::Bool=false)
     return stream
 end
 
+"Request processing for a trigger-driven stream and return it."
 function trigger_process!(stream::Stream)
     _check_callback_error(stream)
     result = lock(stream.state_lock) do
@@ -383,6 +401,12 @@ function _require_available(buffer::StreamBuffer)
     return buffer.handle
 end
 
+"""
+    dequeue_buffer(stream) -> Union{Nothing,StreamBuffer}
+
+Dequeue a buffer, returning `nothing` when none is available. This convenience
+method allocates a wrapper; use [`dequeue_buffer!`](@ref) on hot paths.
+"""
 function dequeue_buffer(stream::Stream)
     _check_callback_error(stream)
     handle = lock(stream.state_lock) do
@@ -425,8 +449,10 @@ function _return_stream_buffer!(operation, buffer::StreamBuffer, stream::Stream)
     return stream
 end
 
+"Queue a dequeued buffer, clear its wrapper, and return `stream`."
 queue_buffer!(buffer::StreamBuffer, stream::Stream) =
     _return_stream_buffer!(LibPipeWire.pw_stream_queue_buffer, buffer, stream)
+"Return a dequeued buffer, clear its wrapper, and return `stream`."
 return_buffer!(buffer::StreamBuffer, stream::Stream) =
     _return_stream_buffer!(LibPipeWire.pw_stream_return_buffer, buffer, stream)
 
@@ -436,6 +462,7 @@ struct StreamData
     index::Int
 end
 
+"Return a borrowed data-plane view from a dequeued stream buffer."
 function buffer_data(buffer::StreamBuffer, index::Integer=1)
     native_buffer = unsafe_load(_require_available(buffer)).buffer
     native_buffer == C_NULL && throw(InvalidStateException("the stream buffer has no SPA buffer", :no_buffer))
@@ -450,8 +477,10 @@ function _native_data(data::StreamData)
     return unsafe_load(buffer.datas, data.index)
 end
 
+"Return the writable capacity in bytes of a stream data plane."
 capacity(data::StreamData) = Int(_native_data(data).maxsize)
 
+"Return the native memory pointer for a stream data plane."
 function data_pointer(data::StreamData)
     native = _native_data(data)
     native.data == C_NULL &&
@@ -466,6 +495,7 @@ function _chunk(data::StreamData)
     return native, native.chunk, unsafe_load(native.chunk)
 end
 
+"Return a borrowed byte view of the current chunk in a stream data plane."
 function bytes(data::StreamData)
     native, _, chunk = _chunk(data)
     pointer = data_pointer(data)
@@ -474,11 +504,13 @@ function bytes(data::StreamData)
     return unsafe_wrap(Vector{UInt8}, pointer + offset, size; own=false)
 end
 
+"Return a borrowed writable byte view spanning a stream data plane's capacity."
 function writable_bytes(data::StreamData)
     native = _native_data(data)
     return unsafe_wrap(Vector{UInt8}, data_pointer(data), Int(native.maxsize); own=false)
 end
 
+"Set valid chunk bounds for a stream data plane and return `data`."
 function set_chunk!(data::StreamData; offset::Integer=0, size::Integer, stride::Integer=0)
     native, pointer, chunk = _chunk(data)
     0 <= offset <= native.maxsize || throw(ArgumentError("chunk offset exceeds data capacity"))

@@ -65,6 +65,7 @@ end
 
 Base.sizeof(pod::Pod) = length(pod.data)
 
+"Return the SPA type ID stored in an owned POD header."
 function pod_type(pod::Pod)
     data = pod.data
     return GC.@preserve data unsafe_load(Ptr{LibPipeWire.spa_pod}(pointer(data))).type

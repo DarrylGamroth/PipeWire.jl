@@ -1,0 +1,281 @@
+"""
+    Proxy
+
+An owning client-side proxy for a global object in a PipeWire registry. Create
+one with [`bind`](@ref) and close it before closing its registry.
+"""
+mutable struct Proxy{Callbacks}
+    handle::Ptr{LibPipeWire.pw_proxy}
+    registry::Registry
+    interface_type::String
+    version::UInt32
+    state_lock::ReentrantLock
+    callback_lock::ReentrantLock
+    listener::Base.RefValue{LibPipeWire.spa_hook}
+    events::Base.RefValue{LibPipeWire.pw_proxy_events}
+    callbacks::Callbacks
+    callback_error::Base.RefValue{Any}
+    global_id::UInt32
+    removed::Bool
+    callbacks_active::Bool
+end
+
+function _invoke_proxy_callback(proxy::Proxy, ::Val{Field}, args...) where {Field}
+    lock(proxy.callback_lock)
+    if !proxy.callbacks_active
+        unlock(proxy.callback_lock)
+        return nothing
+    end
+    callback = getfield(proxy.callbacks, Field)
+    unlock(proxy.callback_lock)
+    callback === nothing && return nothing
+    try
+        callback(proxy, args...)
+    catch error
+        lock(proxy.callback_lock) do
+            proxy.callback_error[] === nothing && (proxy.callback_error[] = error)
+        end
+        _stop_after_callback(proxy.registry.core.callback_state, error)
+    end
+    return nothing
+end
+
+function _proxy_destroyed(data::Ptr{Cvoid})::Cvoid
+    proxy = _callback_state(data, Proxy)
+    lock(proxy.callback_lock) do
+        proxy.callbacks_active = false
+    end
+    released = lock(proxy.state_lock) do
+        proxy.handle == C_NULL && return false
+        proxy.handle = Ptr{LibPipeWire.pw_proxy}(C_NULL)
+        return true
+    end
+    released && _release_proxy(proxy.registry)
+    return nothing
+end
+
+function _proxy_bound(data::Ptr{Cvoid}, global_id::UInt32)::Cvoid
+    proxy = _callback_state(data, Proxy)
+    lock(proxy.callback_lock) do
+        proxy.global_id = global_id
+    end
+    _invoke_proxy_callback(proxy, Val(:on_bound), global_id)
+    return nothing
+end
+
+function _proxy_removed(data::Ptr{Cvoid})::Cvoid
+    proxy = _callback_state(data, Proxy)
+    lock(proxy.callback_lock) do
+        proxy.removed = true
+    end
+    _invoke_proxy_callback(proxy, Val(:on_removed))
+    return nothing
+end
+
+function _proxy_done(data::Ptr{Cvoid}, sequence::Cint)::Cvoid
+    proxy = _callback_state(data, Proxy)
+    _invoke_proxy_callback(proxy, Val(:on_done), sequence)
+    return nothing
+end
+
+function _proxy_error(
+    data::Ptr{Cvoid},
+    sequence::Cint,
+    result::Cint,
+    message::Cstring,
+)::Cvoid
+    proxy = _callback_state(data, Proxy)
+    detail = message == C_NULL ? nothing : unsafe_string(message)
+    error = PipeWireError(:pw_proxy, result, detail)
+    lock(proxy.callback_lock) do
+        proxy.callback_error[] === nothing && (proxy.callback_error[] = error)
+    end
+    _invoke_proxy_callback(proxy, Val(:on_error), sequence, error)
+    return nothing
+end
+
+function _proxy_bound_properties(
+    data::Ptr{Cvoid},
+    global_id::UInt32,
+    properties::Ptr{LibPipeWire.spa_dict},
+)::Cvoid
+    proxy = _callback_state(data, Proxy)
+    try
+        _invoke_proxy_callback(
+            proxy,
+            Val(:on_bound_properties),
+            global_id,
+            _copy_properties(properties),
+        )
+    catch error
+        lock(proxy.callback_lock) do
+            proxy.callback_error[] === nothing && (proxy.callback_error[] = error)
+        end
+        _stop_after_callback(proxy.registry.core.callback_state, error)
+    end
+    return nothing
+end
+
+const _PROXY_DESTROYED = Ref{Ptr{Cvoid}}(C_NULL)
+const _PROXY_BOUND = Ref{Ptr{Cvoid}}(C_NULL)
+const _PROXY_REMOVED = Ref{Ptr{Cvoid}}(C_NULL)
+const _PROXY_DONE = Ref{Ptr{Cvoid}}(C_NULL)
+const _PROXY_ERROR = Ref{Ptr{Cvoid}}(C_NULL)
+const _PROXY_BOUND_PROPERTIES = Ref{Ptr{Cvoid}}(C_NULL)
+
+function _initialize_proxy_callbacks!()
+    _PROXY_DESTROYED[] = @cfunction(_proxy_destroyed, Cvoid, (Ptr{Cvoid},))
+    _PROXY_BOUND[] = @cfunction(_proxy_bound, Cvoid, (Ptr{Cvoid}, UInt32))
+    _PROXY_REMOVED[] = @cfunction(_proxy_removed, Cvoid, (Ptr{Cvoid},))
+    _PROXY_DONE[] = @cfunction(_proxy_done, Cvoid, (Ptr{Cvoid}, Cint))
+    _PROXY_ERROR[] = @cfunction(
+        _proxy_error,
+        Cvoid,
+        (Ptr{Cvoid}, Cint, Cint, Cstring),
+    )
+    _PROXY_BOUND_PROPERTIES[] = @cfunction(
+        _proxy_bound_properties,
+        Cvoid,
+        (Ptr{Cvoid}, UInt32, Ptr{LibPipeWire.spa_dict}),
+    )
+    return nothing
+end
+
+function _proxy_events()
+    return LibPipeWire.pw_proxy_events(
+        UInt32(1),
+        _PROXY_DESTROYED[],
+        _PROXY_BOUND[],
+        _PROXY_REMOVED[],
+        _PROXY_DONE[],
+        _PROXY_ERROR[],
+        _PROXY_BOUND_PROPERTIES[],
+    )
+end
+
+"""
+    bind(registry::Registry, global::Global; version=global.version, callbacks...) -> Proxy
+
+Bind a registry global and return an owning client-side proxy. The callback
+keywords are `on_bound`, `on_removed`, `on_done`, `on_error`, and
+`on_bound_properties`; each callback receives the proxy as its first argument.
+"""
+function Base.bind(
+    registry::Registry,
+    global_object::Global;
+    version::Integer=global_object.version,
+    on_bound=nothing,
+    on_removed=nothing,
+    on_done=nothing,
+    on_error=nothing,
+    on_bound_properties=nothing,
+)
+    0 <= version <= global_object.version || throw(
+        ArgumentError("the requested proxy version exceeds the announced global version"),
+    )
+    registry_handle = _retain_proxy(registry)
+    interface_name = global_object.type
+    handle = GC.@preserve interface_name LibPipeWire.pw_registry_bind(
+        registry_handle,
+        global_object.id,
+        pointer(interface_name),
+        UInt32(version),
+        0,
+    )
+    if handle == C_NULL
+        _release_proxy(registry)
+        throw(PipeWireError(:pw_registry_bind, -Base.Libc.errno()))
+    end
+
+    callbacks = (
+        on_bound=on_bound,
+        on_removed=on_removed,
+        on_done=on_done,
+        on_error=on_error,
+        on_bound_properties=on_bound_properties,
+    )
+    listener = Ref(_zero_hook())
+    events = Ref(_proxy_events())
+    proxy = Proxy(
+        Ptr{LibPipeWire.pw_proxy}(handle),
+        registry,
+        interface_name,
+        UInt32(version),
+        ReentrantLock(),
+        ReentrantLock(),
+        listener,
+        events,
+        callbacks,
+        Ref{Any}(nothing),
+        typemax(UInt32),
+        false,
+        true,
+    )
+    GC.@preserve proxy listener events begin
+        LibPipeWire.pw_proxy_add_listener(
+            proxy.handle,
+            Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
+            Base.unsafe_convert(Ptr{LibPipeWire.pw_proxy_events}, events),
+            pointer_from_objref(proxy),
+        )
+    end
+    finalizer(close, proxy)
+    return proxy
+end
+
+function _require_open(proxy::Proxy)
+    proxy.handle == C_NULL &&
+        throw(InvalidStateException("the PipeWire proxy is closed", :closed))
+    error = lock(proxy.callback_lock) do
+        proxy.callback_error[]
+    end
+    error === nothing || throw(error)
+    return proxy.handle
+end
+
+function Base.isopen(proxy::Proxy)
+    return lock(proxy.state_lock) do
+        proxy.handle != C_NULL
+    end
+end
+
+function Base.close(proxy::Proxy)
+    handle = lock(proxy.state_lock) do
+        proxy.handle == C_NULL && return C_NULL
+        handle = proxy.handle
+        proxy.handle = Ptr{LibPipeWire.pw_proxy}(C_NULL)
+        return handle
+    end
+    handle == C_NULL && return nothing
+    lock(proxy.callback_lock) do
+        proxy.callbacks_active = false
+    end
+    LibPipeWire.pw_proxy_destroy(handle)
+    _release_proxy(proxy.registry)
+    return nothing
+end
+
+interface_type(proxy::Proxy) = proxy.interface_type
+
+function proxy_id(proxy::Proxy)
+    return lock(proxy.state_lock) do
+        LibPipeWire.pw_proxy_get_id(_require_open(proxy))
+    end
+end
+
+function bound_id(proxy::Proxy)
+    return lock(proxy.callback_lock) do
+        proxy.global_id
+    end
+end
+
+roundtrip(proxy::Proxy) = roundtrip(proxy.registry)
+
+"""Attempt to destroy a global object through a registry."""
+function destroy_global!(registry::Registry, id::Integer)
+    result = lock(registry.state_lock) do
+        LibPipeWire.pw_registry_destroy(_require_open(registry), UInt32(id))
+    end
+    _check_result(:pw_registry_destroy, result)
+    return registry
+end

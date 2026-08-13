@@ -1,0 +1,43 @@
+[general]
+library_name = "libpipewire"
+output_file_path = "../src/generated/LibPipeWire.jl"
+module_name = "LibPipeWire"
+jll_pkg_name = "PipeWire_jll"
+export_symbol_prefixes = []
+prologue_file_path = "prologue.jl"
+epilogue_file_path = ""
+output_ignorelist = []
+use_julia_native_enum_type = false
+print_using_CEnum = false
+print_enum_as_integer = true
+use_deterministic_symbol = true
+is_local_header_only = true
+generate_isystem_symbols = true
+smart_de_anonymize = true
+skip_static_functions = true
+auto_mutability = false
+extract_c_comment_style = "doxygen"
+fold_single_line_comment = true
+struct_field_comment_style = "outofline"
+enumerator_comment_style = "outofline"
+show_c_function_prototype = true
+
+[codegen]
+use_julia_bool = true
+always_NUL_terminated_string = true
+is_function_strictly_typed = false
+opaque_func_arg_as_PtrCvoid = false
+opaque_as_mutable_struct = true
+use_ccall_macro = true
+wrap_variadic_function = false
+field_access_method_list = []
+function_argument_conflict_symbols = ["type", "function", "global", "module"]
+add_record_constructors = []
+
+[codegen.macro]
+macro_mode = "disable"
+functionlike_macro_includelist = []
+add_comment_for_skipped_macro = false
+ignore_header_guards = true
+ignore_header_guards_with_suffixes = []
+ignore_pure_definition = true

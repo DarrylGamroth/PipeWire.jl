@@ -7,6 +7,48 @@ end
 
 (callback::CountProcess)(::Stream) = (callback.count[] += 1)
 
+struct PingRecorder
+    value::Base.RefValue{Tuple{UInt32,Cint}}
+end
+
+(callback::PingRecorder)(::CoreConnection, id::UInt32, sequence::Cint) =
+    (callback.value[] = (id, sequence); nothing)
+
+struct IdRecorder
+    value::Base.RefValue{UInt32}
+end
+
+(callback::IdRecorder)(::CoreConnection, id::UInt32) =
+    (callback.value[] = id; nothing)
+
+struct BoundIdRecorder
+    value::Base.RefValue{Tuple{UInt32,UInt32}}
+end
+
+(callback::BoundIdRecorder)(::CoreConnection, id::UInt32, global_id::UInt32) =
+    (callback.value[] = (id, global_id); nothing)
+
+struct MemoryRecorder
+    value::Base.RefValue{CoreMemory}
+end
+
+(callback::MemoryRecorder)(::CoreConnection, memory::CoreMemory) =
+    (callback.value[] = memory; nothing)
+
+struct BoundPropertiesRecorder
+    value::Base.RefValue{Tuple{UInt32,UInt32,Dict{String,String}}}
+end
+
+function (callback::BoundPropertiesRecorder)(
+    ::CoreConnection,
+    id::UInt32,
+    global_id::UInt32,
+    properties::Dict{String,String},
+)
+    callback.value[] = (id, global_id, properties)
+    return nothing
+end
+
 function invoke_process_callback(stream)
     GC.@preserve stream PipeWire._stream_process(pointer_from_objref(stream))
     return nothing
@@ -22,6 +64,29 @@ function dequeue_allocations(buffer, stream)
     return @allocated dequeue_buffer!(buffer, stream)
 end
 
+function invoke_core_scalar_callbacks(core)
+    GC.@preserve core begin
+        data = pointer_from_objref(core)
+        PipeWire._core_ping(data, UInt32(11), Cint(12))
+        PipeWire._core_remove_id(data, UInt32(13))
+        PipeWire._core_bound_id(data, UInt32(14), UInt32(15))
+        PipeWire._core_add_memory(
+            data,
+            UInt32(16),
+            PipeWire.LibPipeWire.SPA_DATA_MemFd,
+            Cint(17),
+            UInt32(18),
+        )
+        PipeWire._core_remove_memory(data, UInt32(16))
+    end
+    return nothing
+end
+
+function core_scalar_callback_allocations(core)
+    invoke_core_scalar_callbacks(core)
+    return @allocated invoke_core_scalar_callbacks(core)
+end
+
 @testset "Clang.jl-generated C bindings" begin
     raw_version = PipeWire.LibPipeWire.pw_get_library_version()
     @test raw_version != C_NULL
@@ -29,6 +94,87 @@ end
     @test isbitstype(PipeWire.LibPipeWire.spa_hook)
     @test isbitstype(PipeWire.LibPipeWire.pw_core_events)
     @test isbitstype(PipeWire.LibPipeWire.pw_registry_events)
+end
+
+@testset "core protocol" begin
+    context = Context()
+    ping_event = Ref((UInt32(0), Cint(0)))
+    removed_id = Ref(UInt32(0))
+    bound_event = Ref((UInt32(0), UInt32(0)))
+    memory_event = Ref(CoreMemory(UInt32(0), UInt32(0), Cint(-1), UInt32(0)))
+    removed_memory = Ref(UInt32(0))
+    bound_properties = Ref((UInt32(0), UInt32(0), Dict{String,String}()))
+    core_infos = CoreInfo[]
+    done_events = Tuple{UInt32,Cint}[]
+    core = CoreConnection(
+        context;
+        self=true,
+        on_info=(core, info) -> push!(core_infos, info),
+        on_done=(core, id, sequence) -> push!(done_events, (id, sequence)),
+        on_ping=PingRecorder(ping_event),
+        on_remove_id=IdRecorder(removed_id),
+        on_bound_id=BoundIdRecorder(bound_event),
+        on_add_memory=MemoryRecorder(memory_event),
+        on_remove_memory=IdRecorder(removed_memory),
+        on_bound_properties=BoundPropertiesRecorder(bound_properties),
+    )
+
+    @test isconcretetype(typeof(core))
+    @test all(isconcretetype, fieldtypes(typeof(core)))
+    @test isbitstype(CoreMemory)
+    @test core_scalar_callback_allocations(core) == 0
+    @test ping_event[] == (UInt32(11), Cint(12))
+    @test removed_id[] == 13
+    @test bound_event[] == (UInt32(14), UInt32(15))
+    @test memory_event[] == CoreMemory(
+        UInt32(16),
+        PipeWire.LibPipeWire.SPA_DATA_MemFd,
+        Cint(17),
+        UInt32(18),
+    )
+    @test removed_memory[] == 16
+
+    PipeWire._with_properties_dict(Dict("object.path" => "test.core.bound")) do dictionary
+        GC.@preserve core PipeWire._core_bound_properties(
+            pointer_from_objref(core),
+            UInt32(19),
+            UInt32(20),
+            dictionary,
+        )
+    end
+    @test bound_properties[] == (
+        UInt32(19),
+        UInt32(20),
+        Dict("object.path" => "test.core.bound"),
+    )
+
+    initial_properties = core_properties(core)
+    @test update_properties!(core, Dict("application.name" => "PipeWire.jl protocol test")) ===
+          core
+    updated_properties = core_properties(core)
+    @test updated_properties["application.name"] == "PipeWire.jl protocol test"
+    updated_properties["application.name"] = "snapshot only"
+    @test core_properties(core)["application.name"] == "PipeWire.jl protocol test"
+    @test initial_properties isa Dict{String,String}
+
+    sequence = sync!(core, 41)
+    @test sequence isa Cint
+    roundtrip(core)
+    @test any(event -> event == (UInt32(0), sequence), done_events)
+
+    previous_info_count = length(core_infos)
+    @test hello!(core) === core
+    roundtrip(core)
+    @test length(core_infos) > previous_info_count
+
+    @test_throws ArgumentError sync!(core, -1; id=-1)
+    @test_throws ArgumentError sync!(core, big(typemax(Cint)) + 1)
+    @test_throws ArgumentError pong!(core, 0, big(typemax(Cint)) + 1)
+    @test_throws ArgumentError report_error!(core, 0, 0, -1, "bad\0message")
+    @test_throws ArgumentError hello!(core; version=5)
+
+    close(core)
+    close(context)
 end
 
 @testset "PipeWire" begin
@@ -89,6 +235,7 @@ end
     @test isconcretetype(typeof(registry))
     @test all(isconcretetype, fieldtypes(typeof(registry)))
     @test_throws InvalidStateException close(core)
+    @test_throws InvalidStateException hello!(core)
 
     roundtrip(registry)
     @test length(core_infos) == 1

@@ -27,11 +27,11 @@ jobs:
         with:
           version: ${{ matrix.julia-version }}
       - uses: julia-actions/cache@v3
-      - name: Install public PipeWire_jll
+      - name: Instantiate from DarrylGamrothRegistry
         run: >-
           julia --startup-file=no --project=.
           -e 'using Pkg;
-          Pkg.develop(url="https://github.com/DarrylGamroth/PipeWire_jll.jl");
+          Pkg.Registry.add(url="https://github.com/DarrylGamroth/PackageRegistry.git");
           Pkg.instantiate()'
       - name: Run tests
         run: julia --startup-file=no --project=. -e 'using Pkg; Pkg.test()'

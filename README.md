@@ -14,7 +14,8 @@ The package is being built in layers:
 The managed API currently includes main loops, contexts, core connections,
 registry-global snapshots and binding, generic proxies, native-backed
 properties, typed node/port/device/link/metadata/factory/module/client proxies,
-streams, owned SPA PODs for raw-audio formats, and mapped stream buffers.
+typed core protocol events and methods, streams, owned SPA PODs for raw-audio
+formats, and mapped stream buffers.
 Native resources follow Julia's `close`/`isopen` conventions and enforce
 PipeWire's parent-before-child lifetime rules.
 
@@ -130,15 +131,20 @@ end
 ```
 
 The generated `PipeWire.LibPipeWire` module remains available for client APIs
-that do not yet have a managed wrapper. General SPA POD construction/parsing,
-client permission mutation, and video-format APIs are still in progress.
+that do not yet have a managed wrapper. General SPA POD construction/parsing
+and video-format APIs are still in progress.
 
-Until `PipeWire_jll` is registered, add its public wrapper repository before
-instantiating:
+`PipeWire` and `PipeWire_jll` are published in
+[`DarrylGamrothRegistry`](https://github.com/DarrylGamroth/PackageRegistry).
+Add the registry once, then install the package by name:
 
-```sh
-julia --project=. -e 'using Pkg; Pkg.develop(url="https://github.com/DarrylGamroth/PipeWire_jll.jl"); Pkg.instantiate(); Pkg.test()'
+```julia
+using Pkg
+Pkg.Registry.add(url="https://github.com/DarrylGamroth/PackageRegistry.git")
+Pkg.add("PipeWire")
 ```
+
+The current `PipeWire_jll` artifact supports x86_64 Linux with glibc.
 
 ## Regenerating the C bindings
 

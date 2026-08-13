@@ -1,4 +1,5 @@
 const _PW_ID_CORE = UInt32(0)
+const _PW_VERSION_CORE = UInt32(4)
 const _NULL_CALLBACK = Ptr{Cvoid}(C_NULL)
 
 function _zero_hook()
@@ -120,6 +121,20 @@ struct CoreInfo
     properties::Dict{String,String}
 end
 
+"""
+    CoreMemory
+
+A copied description from a PipeWire core `add_mem` event. `fd` remains owned
+by PipeWire and must not be closed by the callback. `data_type` is one of the
+`SPA_DATA_*` constants in [`LibPipeWire`](@ref).
+"""
+struct CoreMemory
+    id::UInt32
+    data_type::UInt32
+    fd::Cint
+    flags::UInt32
+end
+
 mutable struct CoreState
     loop::MainLoop
     lock::ReentrantLock
@@ -127,6 +142,26 @@ mutable struct CoreState
     done::Bool
     error::Base.RefValue{Any}
     active::Bool
+end
+
+"""
+    CoreConnection
+
+An owning connection to a PipeWire core. Callback types are stored in the type
+parameter so native event dispatch can specialize without abstract callable
+fields.
+"""
+mutable struct CoreConnection{Callbacks}
+    handle::Ptr{LibPipeWire.pw_core}
+    context::Context
+    state_lock::ReentrantLock
+    registry_count::Int
+    stream_count::Int
+    proxy_count::Int
+    listener::Base.RefValue{LibPipeWire.spa_hook}
+    events::Base.RefValue{LibPipeWire.pw_core_events}
+    callback_state::CoreState
+    callbacks::Callbacks
 end
 
 function _callback_state(data::Ptr{Cvoid}, ::Type{T}) where {T}
@@ -147,14 +182,80 @@ function _stop_after_callback(state, error=nothing)
     return nothing
 end
 
-function _invoke_core_callback(core, ::Val{Field}, args...) where {Field}
+function _active_core_callback(
+    core::CoreConnection{Callbacks},
+    ::Val{Field},
+) where {Callbacks,Field}
     state = core.callback_state
-    callback = lock(state.lock) do
-        state.active ? getfield(core.callbacks, Field) : nothing
+    lock(state.lock)
+    if !state.active
+        unlock(state.lock)
+        return nothing, state
     end
+    callback = getfield(core.callbacks, Field)
+    unlock(state.lock)
+    return callback, state
+end
+
+function _invoke_core_callback(
+    core::CoreConnection{Callbacks},
+    field::Val{Field},
+    arg1::A,
+) where {Callbacks,Field,A}
+    callback, state = _active_core_callback(core, field)
     callback === nothing && return nothing
     try
-        callback(core, args...)
+        callback(core, arg1)
+    catch error
+        _stop_after_callback(state, error)
+    end
+    return nothing
+end
+
+function _invoke_core_callback(
+    core::CoreConnection{Callbacks},
+    field::Val{Field},
+    arg1::A,
+    arg2::B,
+) where {Callbacks,Field,A,B}
+    callback, state = _active_core_callback(core, field)
+    callback === nothing && return nothing
+    try
+        callback(core, arg1, arg2)
+    catch error
+        _stop_after_callback(state, error)
+    end
+    return nothing
+end
+
+function _invoke_core_callback(
+    core::CoreConnection{Callbacks},
+    field::Val{Field},
+    arg1::A,
+    arg2::B,
+    arg3::C,
+) where {Callbacks,Field,A,B,C}
+    callback, state = _active_core_callback(core, field)
+    callback === nothing && return nothing
+    try
+        callback(core, arg1, arg2, arg3)
+    catch error
+        _stop_after_callback(state, error)
+    end
+    return nothing
+end
+
+function _invoke_core_add_memory(
+    core::CoreConnection{Callbacks},
+    id::UInt32,
+    data_type::UInt32,
+    fd::Cint,
+    flags::UInt32,
+) where {Callbacks}
+    callback, state = _active_core_callback(core, Val(:on_add_memory))
+    callback === nothing && return nothing
+    try
+        callback(core, CoreMemory(id, data_type, fd, flags))
     catch error
         _stop_after_callback(state, error)
     end
@@ -197,6 +298,12 @@ function _core_done(data::Ptr{Cvoid}, id::UInt32, sequence::Cint)::Cvoid
     return nothing
 end
 
+function _core_ping(data::Ptr{Cvoid}, id::UInt32, sequence::Cint)::Cvoid
+    core = _callback_state(data, CoreConnection)
+    _invoke_core_callback(core, Val(:on_ping), id, sequence)
+    return nothing
+end
+
 function _core_error(
     data::Ptr{Cvoid},
     id::UInt32,
@@ -216,9 +323,66 @@ function _core_error(
     return nothing
 end
 
+function _core_remove_id(data::Ptr{Cvoid}, id::UInt32)::Cvoid
+    core = _callback_state(data, CoreConnection)
+    _invoke_core_callback(core, Val(:on_remove_id), id)
+    return nothing
+end
+
+function _core_bound_id(data::Ptr{Cvoid}, id::UInt32, global_id::UInt32)::Cvoid
+    core = _callback_state(data, CoreConnection)
+    _invoke_core_callback(core, Val(:on_bound_id), id, global_id)
+    return nothing
+end
+
+function _core_add_memory(
+    data::Ptr{Cvoid},
+    id::UInt32,
+    data_type::UInt32,
+    fd::Cint,
+    flags::UInt32,
+)::Cvoid
+    core = _callback_state(data, CoreConnection)
+    _invoke_core_add_memory(core, id, data_type, fd, flags)
+    return nothing
+end
+
+function _core_remove_memory(data::Ptr{Cvoid}, id::UInt32)::Cvoid
+    core = _callback_state(data, CoreConnection)
+    _invoke_core_callback(core, Val(:on_remove_memory), id)
+    return nothing
+end
+
+function _core_bound_properties(
+    data::Ptr{Cvoid},
+    id::UInt32,
+    global_id::UInt32,
+    properties::Ptr{LibPipeWire.spa_dict},
+)::Cvoid
+    core = _callback_state(data, CoreConnection)
+    try
+        _invoke_core_callback(
+            core,
+            Val(:on_bound_properties),
+            id,
+            global_id,
+            _copy_properties(properties),
+        )
+    catch error
+        _stop_after_callback(core.callback_state, error)
+    end
+    return nothing
+end
+
 const _CORE_INFO = Ref{Ptr{Cvoid}}(C_NULL)
 const _CORE_DONE = Ref{Ptr{Cvoid}}(C_NULL)
+const _CORE_PING = Ref{Ptr{Cvoid}}(C_NULL)
 const _CORE_ERROR = Ref{Ptr{Cvoid}}(C_NULL)
+const _CORE_REMOVE_ID = Ref{Ptr{Cvoid}}(C_NULL)
+const _CORE_BOUND_ID = Ref{Ptr{Cvoid}}(C_NULL)
+const _CORE_ADD_MEMORY = Ref{Ptr{Cvoid}}(C_NULL)
+const _CORE_REMOVE_MEMORY = Ref{Ptr{Cvoid}}(C_NULL)
+const _CORE_BOUND_PROPERTIES = Ref{Ptr{Cvoid}}(C_NULL)
 const _REGISTRY_GLOBAL_ADDED = Ref{Ptr{Cvoid}}(C_NULL)
 const _REGISTRY_GLOBAL_REMOVED = Ref{Ptr{Cvoid}}(C_NULL)
 
@@ -227,19 +391,18 @@ function _core_events()
         UInt32(1),
         _CORE_INFO[],
         _CORE_DONE[],
-        _NULL_CALLBACK,
+        _CORE_PING[],
         _CORE_ERROR[],
-        _NULL_CALLBACK,
-        _NULL_CALLBACK,
-        _NULL_CALLBACK,
-        _NULL_CALLBACK,
-        _NULL_CALLBACK,
+        _CORE_REMOVE_ID[],
+        _CORE_BOUND_ID[],
+        _CORE_ADD_MEMORY[],
+        _CORE_REMOVE_MEMORY[],
+        _CORE_BOUND_PROPERTIES[],
     )
 end
 
 """
-    CoreConnection(context::Context; self=false, properties=nothing,
-                   on_info=nothing, on_done=nothing, on_error=nothing)
+    CoreConnection(context::Context; self=false, properties=nothing, callbacks...)
 
 Connect `context` to a PipeWire core. By default this connects to the daemon
 selected by PipeWire's client configuration. Set `self=true` to connect the
@@ -250,31 +413,28 @@ string pairs. A `Properties` argument is copied and remains open.
 `on_info(core, info)` receives copied [`CoreInfo`](@ref) snapshots.
 `on_done(core, id, sequence)` observes synchronization acknowledgements, and
 `on_error(core, id, sequence, error)` observes native core errors. Callback
-types are part of the concrete `CoreConnection` type.
+keywords for the remaining core protocol events are `on_ping`, `on_remove_id`,
+`on_bound_id`, `on_add_memory`, `on_remove_memory`, and
+`on_bound_properties`. The memory callback receives a [`CoreMemory`](@ref);
+the bound-properties callback receives copied properties. Callback types are
+part of the concrete `CoreConnection` type.
 
 Close every child [`Registry`](@ref), [`Stream`](@ref), and core-created proxy
 before closing the connection.
 """
-mutable struct CoreConnection{Callbacks}
-    handle::Ptr{LibPipeWire.pw_core}
-    context::Context
-    state_lock::ReentrantLock
-    registry_count::Int
-    stream_count::Int
-    proxy_count::Int
-    listener::Base.RefValue{LibPipeWire.spa_hook}
-    events::Base.RefValue{LibPipeWire.pw_core_events}
-    callback_state::CoreState
-    callbacks::Callbacks
-end
-
 function CoreConnection(
     context::Context;
     self::Bool=false,
     properties=nothing,
     on_info=nothing,
     on_done=nothing,
+    on_ping=nothing,
     on_error=nothing,
+    on_remove_id=nothing,
+    on_bound_id=nothing,
+    on_add_memory=nothing,
+    on_remove_memory=nothing,
+    on_bound_properties=nothing,
 )
     context_handle = _retain_core(context)
     native_properties = try
@@ -295,7 +455,17 @@ function CoreConnection(
     end
 
     state = CoreState(main_loop(context), ReentrantLock(), nothing, false, Ref{Any}(nothing), true)
-    callbacks = (on_info=on_info, on_done=on_done, on_error=on_error)
+    callbacks = (
+        on_info=on_info,
+        on_done=on_done,
+        on_ping=on_ping,
+        on_error=on_error,
+        on_remove_id=on_remove_id,
+        on_bound_id=on_bound_id,
+        on_add_memory=on_add_memory,
+        on_remove_memory=on_remove_memory,
+        on_bound_properties=on_bound_properties,
+    )
     listener = Ref(_zero_hook())
     events = Ref(_core_events())
     core = CoreConnection(
@@ -474,6 +644,139 @@ function roundtrip(core::CoreConnection)
     return nothing
 end
 
+function _core_uint32(value::Integer, kind::AbstractString)
+    0 <= value <= typemax(UInt32) || throw(ArgumentError("$kind is outside UInt32 range"))
+    return UInt32(value)
+end
+
+function _core_sequence(value::Integer)
+    typemin(Cint) <= value <= typemax(Cint) ||
+        throw(ArgumentError("sequence is outside Cint range"))
+    return Cint(value)
+end
+
+"""
+    sync!(core, sequence=0; id=0) -> Cint
+
+Request an asynchronous synchronization barrier and return the sequence that
+will be delivered to `on_done`. Use [`roundtrip`](@ref) when a blocking barrier
+is preferable.
+"""
+function sync!(core::CoreConnection, sequence::Integer=0; id::Integer=_PW_ID_CORE)
+    object_id = _core_uint32(id, "object ID")
+    requested = _core_sequence(sequence)
+    result = lock(core.state_lock) do
+        LibPipeWire.pw_core_sync(_require_open(core), object_id, requested)
+    end
+    return _check_result(:pw_core_sync, result)
+end
+
+"""
+    pong!(core, id, sequence)
+
+Reply to a core `on_ping` event and return `core`.
+"""
+function pong!(core::CoreConnection, id::Integer, sequence::Integer)
+    object_id = _core_uint32(id, "object ID")
+    reply = _core_sequence(sequence)
+    result = lock(core.state_lock) do
+        LibPipeWire.pw_core_pong(_require_open(core), object_id, reply)
+    end
+    _check_result(:pw_core_pong, result)
+    return core
+end
+
+"""
+    report_error!(core, id, sequence, result, message)
+
+Report a fatal resource error to the PipeWire server and return `core`.
+"""
+function report_error!(
+    core::CoreConnection,
+    id::Integer,
+    sequence::Integer,
+    result::Integer,
+    message::AbstractString,
+)
+    object_id = _core_uint32(id, "object ID")
+    requested = _core_sequence(sequence)
+    typemin(Cint) <= result <= typemax(Cint) ||
+        throw(ArgumentError("result is outside Cint range"))
+    detail = _validate_c_string(String(message), "error message")
+    native_result = lock(core.state_lock) do
+        handle = _require_open(core)
+        GC.@preserve detail LibPipeWire.pw_core_error(
+            handle,
+            object_id,
+            requested,
+            Cint(result),
+            pointer(detail),
+        )
+    end
+    _check_result(:pw_core_error, native_result)
+    return core
+end
+
+"""
+    hello!(core; version=4)
+
+Restart the core protocol conversation and return `core`. PipeWire destroys
+all server resources owned by this client except the core and client resource,
+so this operation is rejected while managed registries, streams, or created
+proxies remain open.
+"""
+function hello!(core::CoreConnection; version::Integer=_PW_VERSION_CORE)
+    requested_version = _core_uint32(version, "core version")
+    requested_version <= _PW_VERSION_CORE ||
+        throw(ArgumentError("the requested core version is not supported"))
+    result = lock(core.state_lock) do
+        _require_open(core)
+        (core.registry_count == 0 && core.stream_count == 0 && core.proxy_count == 0) ||
+            throw(
+                InvalidStateException(
+                    "cannot restart the core protocol while managed child resources are open",
+                    :open_children,
+                ),
+            )
+        LibPipeWire.pw_core_hello(core.handle, requested_version)
+    end
+    _check_result(:pw_core_hello, result)
+    return core
+end
+
+"""
+    core_properties(core) -> Dict{String,String}
+
+Return a copied snapshot of the local properties associated with `core`.
+"""
+function core_properties(core::CoreConnection)
+    return lock(core.state_lock) do
+        pointer = LibPipeWire.pw_core_get_properties(_require_open(core))
+        pointer == C_NULL && throw(PipeWireError(:pw_core_get_properties, -Base.Libc.EIO))
+        native = unsafe_load(pointer)
+        dictionary = Ref(native.dict)
+        GC.@preserve dictionary _copy_properties(
+            Base.unsafe_convert(Ptr{LibPipeWire.spa_dict}, dictionary),
+        )
+    end
+end
+
+"""
+    update_properties!(core, properties)
+
+Update the local properties associated with a core and its client, then return
+`core`.
+"""
+function update_properties!(core::CoreConnection, properties)
+    result = _with_properties_dict(properties) do dictionary
+        lock(core.state_lock) do
+            LibPipeWire.pw_core_update_properties(_require_open(core), dictionary)
+        end
+    end
+    _check_result(:pw_core_update_properties, result)
+    return core
+end
+
 """
     Global
 
@@ -569,10 +872,32 @@ function _initialize_callbacks!()
         (Ptr{Cvoid}, Ptr{LibPipeWire.pw_core_info}),
     )
     _CORE_DONE[] = @cfunction(_core_done, Cvoid, (Ptr{Cvoid}, UInt32, Cint))
+    _CORE_PING[] = @cfunction(_core_ping, Cvoid, (Ptr{Cvoid}, UInt32, Cint))
     _CORE_ERROR[] = @cfunction(
         _core_error,
         Cvoid,
         (Ptr{Cvoid}, UInt32, Cint, Cint, Cstring),
+    )
+    _CORE_REMOVE_ID[] = @cfunction(_core_remove_id, Cvoid, (Ptr{Cvoid}, UInt32))
+    _CORE_BOUND_ID[] = @cfunction(
+        _core_bound_id,
+        Cvoid,
+        (Ptr{Cvoid}, UInt32, UInt32),
+    )
+    _CORE_ADD_MEMORY[] = @cfunction(
+        _core_add_memory,
+        Cvoid,
+        (Ptr{Cvoid}, UInt32, UInt32, Cint, UInt32),
+    )
+    _CORE_REMOVE_MEMORY[] = @cfunction(
+        _core_remove_memory,
+        Cvoid,
+        (Ptr{Cvoid}, UInt32),
+    )
+    _CORE_BOUND_PROPERTIES[] = @cfunction(
+        _core_bound_properties,
+        Cvoid,
+        (Ptr{Cvoid}, UInt32, UInt32, Ptr{LibPipeWire.spa_dict}),
     )
     _REGISTRY_GLOBAL_ADDED[] = @cfunction(
         _registry_global_added,

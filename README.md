@@ -92,12 +92,20 @@ rates = Pod(SPA.Array(Int32[44_100, 48_000, 96_000]))
 record = Pod(SPA.Struct(Pod(Int32(7)), Pod("audio")))
 fields = pod_value(SPA.Struct, record).values
 @assert pod_value(Int32, fields[1]) == 7
+
+supported_rates = SPA.Choice(SPA.CHOICE_ENUM, Int32[48_000, 44_100, 96_000])
+format = SPA.Object(
+    PipeWire.LibPipeWire.SPA_TYPE_OBJECT_Format,
+    PipeWire.LibPipeWire.SPA_PARAM_EnumFormat,
+    SPA.Property(PipeWire.LibPipeWire.SPA_FORMAT_AUDIO_rate, supported_rates),
+)
+@assert pod_value(SPA.Object, Pod(format)) == format
 ```
 
 The scalar API covers `None`, boolean, ID, 32- and 64-bit integer, 32- and
 64-bit floating-point, string, bytes, rectangle, fraction, and file-descriptor
-PODs. Homogeneous arrays and heterogeneous structs are also supported. Choice,
-object, and sequence decoding is still in progress.
+PODs. Homogeneous arrays, heterogeneous structs, choices, and objects with
+owned properties are also supported. Sequence decoding is still in progress.
 
 `with_registry` connects to the default PipeWire daemon. For an embedded
 in-process core, use `with_registry(self=true)`.

@@ -70,6 +70,27 @@ finally
 end
 ```
 
+## SPA POD values
+
+Scalar SPA PODs have owned Julia representations. Use the typed `pod_value`
+form when the wire type is known so inference can keep the result concrete.
+SPA-specific values live under the `SPA` namespace.
+
+```julia
+rate = Pod(Int32(48_000))
+@assert pod_value(Int32, rate) == 48_000
+
+frame_size = Pod(SPA.Rectangle(1_920, 1_080))
+@assert pod_value(SPA.Rectangle, frame_size) == SPA.Rectangle(1_920, 1_080)
+
+payload = Pod(SPA.Bytes(UInt8[0x01, 0x02]))
+@assert pod_value(SPA.Bytes, payload) == SPA.Bytes(UInt8[0x01, 0x02])
+```
+
+The scalar API covers `None`, boolean, ID, 32- and 64-bit integer, 32- and
+64-bit floating-point, string, bytes, rectangle, fraction, and file-descriptor
+PODs. Array, choice, struct, object, and sequence decoding is still in progress.
+
 `with_registry` connects to the default PipeWire daemon. For an embedded
 in-process core, use `with_registry(self=true)`.
 
@@ -131,7 +152,7 @@ end
 ```
 
 The generated `PipeWire.LibPipeWire` module remains available for client APIs
-that do not yet have a managed wrapper. General SPA POD construction/parsing
+that do not yet have a managed wrapper. Container SPA POD construction/parsing
 and video-format APIs are still in progress.
 
 `PipeWire` and `PipeWire_jll` are published in

@@ -87,6 +87,11 @@ function core_scalar_callback_allocations(core)
     return @allocated invoke_core_scalar_callbacks(core)
 end
 
+function pod_value_allocations(::Type{T}, pod) where {T}
+    pod_value(T, pod)
+    return @allocated pod_value(T, pod)
+end
+
 @testset "Clang.jl-generated C bindings" begin
     raw_version = PipeWire.LibPipeWire.pw_get_library_version()
     @test raw_version != C_NULL
@@ -487,6 +492,84 @@ end
     @test info.error == "node failed"
     @test isempty(info.properties)
     @test isempty(info.params)
+end
+
+@testset "scalar SPA POD values" begin
+    scalar_values = (
+        (Nothing, nothing, PipeWire.LibPipeWire.SPA_TYPE_None),
+        (Bool, true, PipeWire.LibPipeWire.SPA_TYPE_Bool),
+        (Bool, false, PipeWire.LibPipeWire.SPA_TYPE_Bool),
+        (SPA.Id, SPA.Id(17), PipeWire.LibPipeWire.SPA_TYPE_Id),
+        (Int32, Int32(-123), PipeWire.LibPipeWire.SPA_TYPE_Int),
+        (Int64, Int64(1) << 40, PipeWire.LibPipeWire.SPA_TYPE_Long),
+        (Float32, 1.25f0, PipeWire.LibPipeWire.SPA_TYPE_Float),
+        (Float64, -2.5, PipeWire.LibPipeWire.SPA_TYPE_Double),
+        (String, "PipeWire ✓", PipeWire.LibPipeWire.SPA_TYPE_String),
+        (SPA.Bytes, SPA.Bytes(UInt8[0x00, 0x7f, 0xff]), PipeWire.LibPipeWire.SPA_TYPE_Bytes),
+        (SPA.Fd, SPA.Fd(-1), PipeWire.LibPipeWire.SPA_TYPE_Fd),
+        (
+            SPA.Rectangle,
+            SPA.Rectangle(1_920, 1_080),
+            PipeWire.LibPipeWire.SPA_TYPE_Rectangle,
+        ),
+        (
+            SPA.Fraction,
+            SPA.Fraction(30_000, 1_001),
+            PipeWire.LibPipeWire.SPA_TYPE_Fraction,
+        ),
+    )
+
+    for (value_type, value, wire_type) in scalar_values
+        pod = Pod(value)
+        @test pod_type(pod) == wire_type
+        @test pod_value(value_type, pod) == value
+        @test pod_value(pod) == value
+    end
+
+    for value_type in (SPA.Id, SPA.Fd, SPA.Bytes, SPA.Rectangle, SPA.Fraction)
+        @test isconcretetype(value_type)
+        @test all(isconcretetype, fieldtypes(value_type))
+    end
+    @test all(isbitstype, (SPA.Id, SPA.Fd, SPA.Rectangle, SPA.Fraction))
+
+    bytes_source = UInt8[1, 2, 3]
+    bytes_value = SPA.Bytes(bytes_source)
+    bytes_source[1] = 9
+    @test bytes_value == SPA.Bytes(UInt8[1, 2, 3])
+    @test isequal(bytes_value, SPA.Bytes(UInt8[1, 2, 3]))
+    @test hash(bytes_value) == hash(SPA.Bytes(UInt8[1, 2, 3]))
+
+    int_pod = Pod(Int32(-7))
+    rectangle_pod = Pod(SPA.Rectangle(640, 480))
+    @test @inferred(pod_value(Int32, int_pod)) == -7
+    @test @inferred(pod_value(SPA.Rectangle, rectangle_pod)) == SPA.Rectangle(640, 480)
+    @test pod_value_allocations(Int32, int_pod) == 0
+    @test pod_value_allocations(SPA.Rectangle, rectangle_pod) == 0
+
+    @test_throws ArgumentError pod_value(Int32, Pod(true))
+    @test_throws ArgumentError SPA.Id(-1)
+    @test_throws ArgumentError SPA.Id(big(typemax(UInt32)) + 1)
+    @test_throws ArgumentError SPA.Fd(big(typemax(Int64)) + 1)
+    @test_throws ArgumentError SPA.Rectangle(-1, 1)
+    @test_throws ArgumentError SPA.Fraction(1, -1)
+    @test_throws ArgumentError Pod("embedded\0null")
+
+    malformed_string = PipeWire._pod_from_body(
+        UInt32(PipeWire.LibPipeWire.SPA_TYPE_String),
+        UInt8[0x61],
+    )
+    embedded_null = PipeWire._pod_from_body(
+        UInt32(PipeWire.LibPipeWire.SPA_TYPE_String),
+        UInt8[0x61, 0x00, 0x62, 0x00],
+    )
+    malformed_bool = PipeWire._pod_from_body(
+        UInt32(PipeWire.LibPipeWire.SPA_TYPE_Bool),
+        UInt8[0x01],
+    )
+    @test_throws ArgumentError pod_value(String, malformed_string)
+    @test_throws ArgumentError pod_value(String, embedded_null)
+    @test_throws ArgumentError pod_value(Bool, malformed_bool)
+    @test_throws ArgumentError pod_value(audio_format())
 end
 
 @testset "managed stream" begin

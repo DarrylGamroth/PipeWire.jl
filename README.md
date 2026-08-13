@@ -140,7 +140,8 @@ Add the registry once, then install the package by name:
 
 ```julia
 using Pkg
-Pkg.Registry.add(url="https://github.com/DarrylGamroth/PackageRegistry.git")
+Pkg.Registry.add("General")
+Pkg.Registry.add(Pkg.RegistrySpec(url="https://github.com/DarrylGamroth/PackageRegistry.git"))
 Pkg.add("PipeWire")
 ```
 

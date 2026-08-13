@@ -31,7 +31,8 @@ jobs:
         run: >-
           julia --startup-file=no --project=.
           -e 'using Pkg;
-          Pkg.Registry.add(url="https://github.com/DarrylGamroth/PackageRegistry.git");
+          Pkg.Registry.add("General");
+          Pkg.Registry.add(Pkg.RegistrySpec(url="https://github.com/DarrylGamroth/PackageRegistry.git"));
           Pkg.instantiate()'
       - name: Run tests
         run: julia --startup-file=no --project=. -e 'using Pkg; Pkg.test()'

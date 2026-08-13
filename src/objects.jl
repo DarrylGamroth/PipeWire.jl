@@ -228,7 +228,7 @@ function _invoke_object_callback(object::ManagedObject, ::Val{Field}, args...) w
         lock(object.callback_lock) do
             object.callback_error[] === nothing && (object.callback_error[] = error)
         end
-        _stop_after_callback(object.proxy.registry.core.callback_state, error)
+        _stop_after_callback(_proxy_core(object.proxy).callback_state, error)
     end
     return nothing
 end
@@ -249,6 +249,20 @@ function Base.close(object::ManagedObject)
     end
     close(object.proxy)
     return nothing
+end
+
+function destroy_object!(core::CoreConnection, object::ManagedObject)
+    object.proxy.parent isa CoreConnection || throw(
+        ArgumentError("only core-created PipeWire objects can be destroyed this way"),
+    )
+    object.proxy.parent === core || throw(
+        ArgumentError("the object belongs to a different PipeWire core"),
+    )
+    lock(object.callback_lock) do
+        object.callbacks_active = false
+    end
+    destroy_object!(core, object.proxy)
+    return core
 end
 
 interface_type(object::ManagedObject) = interface_type(object.proxy)
@@ -332,7 +346,7 @@ function _record_object_callback_error(object::ManagedObject, error)
     lock(object.callback_lock) do
         object.callback_error[] === nothing && (object.callback_error[] = error)
     end
-    _stop_after_callback(object.proxy.registry.core.callback_state, error)
+    _stop_after_callback(_proxy_core(object.proxy).callback_state, error)
     return nothing
 end
 
@@ -426,6 +440,71 @@ function _proxy_callback_keywords(on_bound, on_removed, on_done, on_error, on_bo
     )
 end
 
+function _attach_node(proxy::Proxy, on_info, on_param)
+    listener = Ref(_zero_hook())
+    events = Ref(LibPipeWire.pw_node_events(UInt32(0), _NODE_INFO[], _NODE_PARAM[]))
+    callbacks = (on_info=on_info, on_param=on_param)
+    object = Node(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
+    result = GC.@preserve object listener events LibPipeWire.pw_node_add_listener(
+        Ptr{LibPipeWire.pw_node}(proxy.handle),
+        Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
+        Base.unsafe_convert(Ptr{LibPipeWire.pw_node_events}, events),
+        pointer_from_objref(object),
+    )
+    result < 0 && (close(object); throw(PipeWireError(:pw_node_add_listener, result)))
+    finalizer(close, object)
+    return object
+end
+
+
+function _attach_port(proxy::Proxy, on_info, on_param)
+    listener = Ref(_zero_hook())
+    events = Ref(LibPipeWire.pw_port_events(UInt32(0), _PORT_INFO[], _PORT_PARAM[]))
+    callbacks = (on_info=on_info, on_param=on_param)
+    object = Port(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
+    result = GC.@preserve object listener events LibPipeWire.pw_port_add_listener(
+        Ptr{LibPipeWire.pw_port}(proxy.handle),
+        Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
+        Base.unsafe_convert(Ptr{LibPipeWire.pw_port_events}, events),
+        pointer_from_objref(object),
+    )
+    result < 0 && (close(object); throw(PipeWireError(:pw_port_add_listener, result)))
+    finalizer(close, object)
+    return object
+end
+
+function _attach_device(proxy::Proxy, on_info, on_param)
+    listener = Ref(_zero_hook())
+    events = Ref(LibPipeWire.pw_device_events(UInt32(0), _DEVICE_INFO[], _DEVICE_PARAM[]))
+    callbacks = (on_info=on_info, on_param=on_param)
+    object = Device(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
+    result = GC.@preserve object listener events LibPipeWire.pw_device_add_listener(
+        Ptr{LibPipeWire.pw_device}(proxy.handle),
+        Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
+        Base.unsafe_convert(Ptr{LibPipeWire.pw_device_events}, events),
+        pointer_from_objref(object),
+    )
+    result < 0 && (close(object); throw(PipeWireError(:pw_device_add_listener, result)))
+    finalizer(close, object)
+    return object
+end
+
+function _attach_link(proxy::Proxy, on_info)
+    listener = Ref(_zero_hook())
+    events = Ref(LibPipeWire.pw_link_events(UInt32(0), _LINK_INFO[]))
+    callbacks = (on_info=on_info,)
+    object = Link(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
+    result = GC.@preserve object listener events LibPipeWire.pw_link_add_listener(
+        Ptr{LibPipeWire.pw_link}(proxy.handle),
+        Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
+        Base.unsafe_convert(Ptr{LibPipeWire.pw_link_events}, events),
+        pointer_from_objref(object),
+    )
+    result < 0 && (close(object); throw(PipeWireError(:pw_link_add_listener, result)))
+    finalizer(close, object)
+    return object
+end
+
 """
     bind(registry, global_object, Node; callbacks...) -> Node
 
@@ -447,19 +526,7 @@ function Base.bind(
 )
     proxy_callbacks = _proxy_callback_keywords(on_bound, on_removed, on_done, on_error, on_bound_properties)
     proxy = _typed_proxy(registry, global_object, _NODE_INTERFACE, version; proxy_callbacks...)
-    listener = Ref(_zero_hook())
-    events = Ref(LibPipeWire.pw_node_events(UInt32(0), _NODE_INFO[], _NODE_PARAM[]))
-    callbacks = (on_info=on_info, on_param=on_param)
-    object = Node(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
-    result = GC.@preserve object listener events LibPipeWire.pw_node_add_listener(
-        Ptr{LibPipeWire.pw_node}(proxy.handle),
-        Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
-        Base.unsafe_convert(Ptr{LibPipeWire.pw_node_events}, events),
-        pointer_from_objref(object),
-    )
-    result < 0 && (close(object); throw(PipeWireError(:pw_node_add_listener, result)))
-    finalizer(close, object)
-    return object
+    return _attach_node(proxy, on_info, on_param)
 end
 
 
@@ -484,19 +551,7 @@ function Base.bind(
 )
     proxy_callbacks = _proxy_callback_keywords(on_bound, on_removed, on_done, on_error, on_bound_properties)
     proxy = _typed_proxy(registry, global_object, _PORT_INTERFACE, version; proxy_callbacks...)
-    listener = Ref(_zero_hook())
-    events = Ref(LibPipeWire.pw_port_events(UInt32(0), _PORT_INFO[], _PORT_PARAM[]))
-    callbacks = (on_info=on_info, on_param=on_param)
-    object = Port(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
-    result = GC.@preserve object listener events LibPipeWire.pw_port_add_listener(
-        Ptr{LibPipeWire.pw_port}(proxy.handle),
-        Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
-        Base.unsafe_convert(Ptr{LibPipeWire.pw_port_events}, events),
-        pointer_from_objref(object),
-    )
-    result < 0 && (close(object); throw(PipeWireError(:pw_port_add_listener, result)))
-    finalizer(close, object)
-    return object
+    return _attach_port(proxy, on_info, on_param)
 end
 
 """
@@ -520,19 +575,7 @@ function Base.bind(
 )
     proxy_callbacks = _proxy_callback_keywords(on_bound, on_removed, on_done, on_error, on_bound_properties)
     proxy = _typed_proxy(registry, global_object, _DEVICE_INTERFACE, version; proxy_callbacks...)
-    listener = Ref(_zero_hook())
-    events = Ref(LibPipeWire.pw_device_events(UInt32(0), _DEVICE_INFO[], _DEVICE_PARAM[]))
-    callbacks = (on_info=on_info, on_param=on_param)
-    object = Device(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
-    result = GC.@preserve object listener events LibPipeWire.pw_device_add_listener(
-        Ptr{LibPipeWire.pw_device}(proxy.handle),
-        Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
-        Base.unsafe_convert(Ptr{LibPipeWire.pw_device_events}, events),
-        pointer_from_objref(object),
-    )
-    result < 0 && (close(object); throw(PipeWireError(:pw_device_add_listener, result)))
-    finalizer(close, object)
-    return object
+    return _attach_device(proxy, on_info, on_param)
 end
 
 """
@@ -555,19 +598,7 @@ function Base.bind(
 )
     proxy_callbacks = _proxy_callback_keywords(on_bound, on_removed, on_done, on_error, on_bound_properties)
     proxy = _typed_proxy(registry, global_object, _LINK_INTERFACE, version; proxy_callbacks...)
-    listener = Ref(_zero_hook())
-    events = Ref(LibPipeWire.pw_link_events(UInt32(0), _LINK_INFO[]))
-    callbacks = (on_info=on_info,)
-    object = Link(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
-    result = GC.@preserve object listener events LibPipeWire.pw_link_add_listener(
-        Ptr{LibPipeWire.pw_link}(proxy.handle),
-        Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
-        Base.unsafe_convert(Ptr{LibPipeWire.pw_link_events}, events),
-        pointer_from_objref(object),
-    )
-    result < 0 && (close(object); throw(PipeWireError(:pw_link_add_listener, result)))
-    finalizer(close, object)
-    return object
+    return _attach_link(proxy, on_info)
 end
 
 function _with_metadata_method(call, object::Metadata, field::Symbol)
@@ -583,6 +614,29 @@ function _with_metadata_method(call, object::Metadata, field::Symbol)
         )
         call(interface.cb.data, method)
     end
+end
+
+function _attach_metadata(proxy::Proxy, on_property)
+    listener = Ref(_zero_hook())
+    events = Ref(LibPipeWire.pw_metadata_events(UInt32(0), _METADATA_PROPERTY[]))
+    callbacks = (on_property=on_property,)
+    object = Metadata(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
+    result = try
+        _with_metadata_method(object, :add_listener) do data, method
+            GC.@preserve object listener events @ccall $method(
+                data::Ptr{Cvoid},
+                Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener)::Ptr{LibPipeWire.spa_hook},
+                Base.unsafe_convert(Ptr{LibPipeWire.pw_metadata_events}, events)::Ptr{LibPipeWire.pw_metadata_events},
+                pointer_from_objref(object)::Ptr{Cvoid},
+            )::Cint
+        end
+    catch
+        close(object)
+        rethrow()
+    end
+    result < 0 && (close(object); throw(PipeWireError(:pw_metadata_add_listener, result)))
+    finalizer(close, object)
+    return object
 end
 
 """
@@ -605,21 +659,110 @@ function Base.bind(
 )
     proxy_callbacks = _proxy_callback_keywords(on_bound, on_removed, on_done, on_error, on_bound_properties)
     proxy = _typed_proxy(registry, global_object, _METADATA_INTERFACE, version; proxy_callbacks...)
-    listener = Ref(_zero_hook())
-    events = Ref(LibPipeWire.pw_metadata_events(UInt32(0), _METADATA_PROPERTY[]))
-    callbacks = (on_property=on_property,)
-    object = Metadata(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
-    result = _with_metadata_method(object, :add_listener) do data, method
-        GC.@preserve object listener events @ccall $method(
-            data::Ptr{Cvoid},
-            Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener)::Ptr{LibPipeWire.spa_hook},
-            Base.unsafe_convert(Ptr{LibPipeWire.pw_metadata_events}, events)::Ptr{LibPipeWire.pw_metadata_events},
-            pointer_from_objref(object)::Ptr{Cvoid},
-        )::Cint
-    end
-    result < 0 && (close(object); throw(PipeWireError(:pw_metadata_add_listener, result)))
-    finalizer(close, object)
-    return object
+    return _attach_metadata(proxy, on_property)
+end
+
+"""
+    create_object(core, factory_name, Node; properties=nothing, callbacks...) -> Node
+    create_object(core, factory_name, Port; properties=nothing, callbacks...) -> Port
+    create_object(core, factory_name, Device; properties=nothing, callbacks...) -> Device
+    create_object(core, factory_name, Link; properties=nothing, callbacks...) -> Link
+    create_object(core, factory_name, Metadata; properties=nothing, callbacks...) -> Metadata
+
+Create a typed server-side PipeWire object from a factory. Interface callbacks
+and the base proxy callbacks accepted by [`bind`](@ref) are supported.
+"""
+function create_object(
+    core::CoreConnection,
+    factory_name::AbstractString,
+    ::Type{Node};
+    version::Integer=_OBJECT_INTERFACE_VERSION,
+    properties=nothing,
+    on_info=nothing,
+    on_param=nothing,
+    on_bound=nothing,
+    on_removed=nothing,
+    on_done=nothing,
+    on_error=nothing,
+    on_bound_properties=nothing,
+)
+    proxy_callbacks = _proxy_callback_keywords(on_bound, on_removed, on_done, on_error, on_bound_properties)
+    proxy = create_object(core, factory_name, _NODE_INTERFACE; version, properties, proxy_callbacks...)
+    return _attach_node(proxy, on_info, on_param)
+end
+
+function create_object(
+    core::CoreConnection,
+    factory_name::AbstractString,
+    ::Type{Port};
+    version::Integer=_OBJECT_INTERFACE_VERSION,
+    properties=nothing,
+    on_info=nothing,
+    on_param=nothing,
+    on_bound=nothing,
+    on_removed=nothing,
+    on_done=nothing,
+    on_error=nothing,
+    on_bound_properties=nothing,
+)
+    proxy_callbacks = _proxy_callback_keywords(on_bound, on_removed, on_done, on_error, on_bound_properties)
+    proxy = create_object(core, factory_name, _PORT_INTERFACE; version, properties, proxy_callbacks...)
+    return _attach_port(proxy, on_info, on_param)
+end
+
+function create_object(
+    core::CoreConnection,
+    factory_name::AbstractString,
+    ::Type{Device};
+    version::Integer=_OBJECT_INTERFACE_VERSION,
+    properties=nothing,
+    on_info=nothing,
+    on_param=nothing,
+    on_bound=nothing,
+    on_removed=nothing,
+    on_done=nothing,
+    on_error=nothing,
+    on_bound_properties=nothing,
+)
+    proxy_callbacks = _proxy_callback_keywords(on_bound, on_removed, on_done, on_error, on_bound_properties)
+    proxy = create_object(core, factory_name, _DEVICE_INTERFACE; version, properties, proxy_callbacks...)
+    return _attach_device(proxy, on_info, on_param)
+end
+
+function create_object(
+    core::CoreConnection,
+    factory_name::AbstractString,
+    ::Type{Link};
+    version::Integer=_OBJECT_INTERFACE_VERSION,
+    properties=nothing,
+    on_info=nothing,
+    on_bound=nothing,
+    on_removed=nothing,
+    on_done=nothing,
+    on_error=nothing,
+    on_bound_properties=nothing,
+)
+    proxy_callbacks = _proxy_callback_keywords(on_bound, on_removed, on_done, on_error, on_bound_properties)
+    proxy = create_object(core, factory_name, _LINK_INTERFACE; version, properties, proxy_callbacks...)
+    return _attach_link(proxy, on_info)
+end
+
+function create_object(
+    core::CoreConnection,
+    factory_name::AbstractString,
+    ::Type{Metadata};
+    version::Integer=_OBJECT_INTERFACE_VERSION,
+    properties=nothing,
+    on_property=nothing,
+    on_bound=nothing,
+    on_removed=nothing,
+    on_done=nothing,
+    on_error=nothing,
+    on_bound_properties=nothing,
+)
+    proxy_callbacks = _proxy_callback_keywords(on_bound, on_removed, on_done, on_error, on_bound_properties)
+    proxy = create_object(core, factory_name, _METADATA_INTERFACE; version, properties, proxy_callbacks...)
+    return _attach_metadata(proxy, on_property)
 end
 
 function _parameter_ids(ids)
@@ -736,7 +879,7 @@ end
 
 function _metadata_string(value, kind)
     value === nothing && return nothing
-    return _validate_property_string(String(value), kind)
+    return _validate_c_string(String(value), kind)
 end
 
 """

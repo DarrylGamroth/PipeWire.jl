@@ -1,12 +1,12 @@
 """
     Proxy
 
-An owning client-side proxy for a global object in a PipeWire registry. Create
-one with [`bind`](@ref) and close it before closing its registry.
+An owning client-side PipeWire proxy. Create one with [`bind`](@ref) or
+[`create_object`](@ref), and close it before closing its registry or core.
 """
-mutable struct Proxy{Callbacks}
+mutable struct Proxy{Parent,Callbacks}
     handle::Ptr{LibPipeWire.pw_proxy}
-    registry::Registry
+    parent::Parent
     interface_type::String
     version::UInt32
     state_lock::ReentrantLock
@@ -19,6 +19,10 @@ mutable struct Proxy{Callbacks}
     removed::Bool
     callbacks_active::Bool
 end
+
+
+_proxy_core(proxy::Proxy{<:Registry}) = proxy.parent.core
+_proxy_core(proxy::Proxy{<:CoreConnection}) = proxy.parent
 
 function _invoke_proxy_callback(proxy::Proxy, ::Val{Field}, args...) where {Field}
     lock(proxy.callback_lock)
@@ -35,7 +39,7 @@ function _invoke_proxy_callback(proxy::Proxy, ::Val{Field}, args...) where {Fiel
         lock(proxy.callback_lock) do
             proxy.callback_error[] === nothing && (proxy.callback_error[] = error)
         end
-        _stop_after_callback(proxy.registry.core.callback_state, error)
+        _stop_after_callback(_proxy_core(proxy).callback_state, error)
     end
     return nothing
 end
@@ -50,7 +54,7 @@ function _proxy_destroyed(data::Ptr{Cvoid})::Cvoid
         proxy.handle = Ptr{LibPipeWire.pw_proxy}(C_NULL)
         return true
     end
-    released && _release_proxy(proxy.registry)
+    released && _release_proxy(proxy.parent)
     return nothing
 end
 
@@ -111,7 +115,7 @@ function _proxy_bound_properties(
         lock(proxy.callback_lock) do
             proxy.callback_error[] === nothing && (proxy.callback_error[] = error)
         end
-        _stop_after_callback(proxy.registry.core.callback_state, error)
+        _stop_after_callback(_proxy_core(proxy).callback_state, error)
     end
     return nothing
 end
@@ -151,6 +155,36 @@ function _proxy_events()
         _PROXY_ERROR[],
         _PROXY_BOUND_PROPERTIES[],
     )
+end
+
+function _new_proxy(handle, parent, interface_name::String, version::UInt32, callbacks)
+    listener = Ref(_zero_hook())
+    events = Ref(_proxy_events())
+    proxy = Proxy(
+        Ptr{LibPipeWire.pw_proxy}(handle),
+        parent,
+        interface_name,
+        version,
+        ReentrantLock(),
+        ReentrantLock(),
+        listener,
+        events,
+        callbacks,
+        Ref{Any}(nothing),
+        typemax(UInt32),
+        false,
+        true,
+    )
+    GC.@preserve proxy listener events begin
+        LibPipeWire.pw_proxy_add_listener(
+            proxy.handle,
+            Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
+            Base.unsafe_convert(Ptr{LibPipeWire.pw_proxy_events}, events),
+            pointer_from_objref(proxy),
+        )
+    end
+    finalizer(close, proxy)
+    return proxy
 end
 
 """
@@ -194,33 +228,105 @@ function Base.bind(
         on_error=on_error,
         on_bound_properties=on_bound_properties,
     )
-    listener = Ref(_zero_hook())
-    events = Ref(_proxy_events())
-    proxy = Proxy(
-        Ptr{LibPipeWire.pw_proxy}(handle),
-        registry,
-        interface_name,
-        UInt32(version),
-        ReentrantLock(),
-        ReentrantLock(),
-        listener,
-        events,
-        callbacks,
-        Ref{Any}(nothing),
-        typemax(UInt32),
-        false,
-        true,
-    )
-    GC.@preserve proxy listener events begin
-        LibPipeWire.pw_proxy_add_listener(
-            proxy.handle,
-            Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
-            Base.unsafe_convert(Ptr{LibPipeWire.pw_proxy_events}, events),
-            pointer_from_objref(proxy),
+    return _new_proxy(handle, registry, interface_name, UInt32(version), callbacks)
+end
+
+function _with_properties_dict(call, properties::Properties)
+    return lock(properties.state_lock) do
+        native = unsafe_load(_require_open(properties))
+        dictionary = Ref(native.dict)
+        GC.@preserve dictionary call(
+            Base.unsafe_convert(Ptr{LibPipeWire.spa_dict}, dictionary),
         )
     end
-    finalizer(close, proxy)
-    return proxy
+end
+
+_with_properties_dict(call, ::Nothing) = call(Ptr{LibPipeWire.spa_dict}(C_NULL))
+
+function _with_properties_dict(call, entries)
+    properties = Properties(entries)
+    try
+        return _with_properties_dict(call, properties)
+    finally
+        close(properties)
+    end
+end
+
+"""
+    create_object(core, factory_name, interface_type;
+                  version=3, properties=nothing, callbacks...) -> Proxy
+
+Create a server-side object from a PipeWire factory and return its owning
+client proxy. `properties` may be a [`Properties`](@ref) value or any iterable
+of string pairs. Close the proxy before closing `core`.
+"""
+function create_object(
+    core::CoreConnection,
+    factory_name::AbstractString,
+    interface_name::AbstractString;
+    version::Integer=3,
+    properties=nothing,
+    on_bound=nothing,
+    on_removed=nothing,
+    on_done=nothing,
+    on_error=nothing,
+    on_bound_properties=nothing,
+)
+    0 <= version <= typemax(UInt32) || throw(
+        ArgumentError("the requested interface version is outside UInt32 range"),
+    )
+    factory = _validate_c_string(String(factory_name), "factory name")
+    interface = _validate_c_string(String(interface_name), "interface type")
+    core_handle = _retain_proxy(core)
+    handle = try
+        _with_properties_dict(properties) do dictionary
+            GC.@preserve factory interface LibPipeWire.pw_core_create_object(
+                core_handle,
+                pointer(factory),
+                pointer(interface),
+                UInt32(version),
+                dictionary,
+                0,
+            )
+        end
+    catch
+        _release_proxy(core)
+        rethrow()
+    end
+    if handle == C_NULL
+        _release_proxy(core)
+        throw(PipeWireError(:pw_core_create_object, -Base.Libc.errno()))
+    end
+
+    callbacks = (
+        on_bound=on_bound,
+        on_removed=on_removed,
+        on_done=on_done,
+        on_error=on_error,
+        on_bound_properties=on_bound_properties,
+    )
+    try
+        return _new_proxy(handle, core, interface, UInt32(version), callbacks)
+    catch
+        LibPipeWire.pw_proxy_destroy(Ptr{LibPipeWire.pw_proxy}(handle))
+        _release_proxy(core)
+        rethrow()
+    end
+end
+
+"""
+    destroy_object!(core, proxy)
+
+Destroy a core-created object on the server, close its local proxy, and return
+`core`. Call [`roundtrip`](@ref) afterward to observe any asynchronous server
+error or registry removal event.
+"""
+function destroy_object!(core::CoreConnection, proxy::Proxy{<:CoreConnection})
+    proxy.parent === core || throw(
+        ArgumentError("the proxy belongs to a different PipeWire core"),
+    )
+    close(proxy)
+    return core
 end
 
 function _require_open(proxy::Proxy)
@@ -251,7 +357,7 @@ function Base.close(proxy::Proxy)
         proxy.callbacks_active = false
     end
     LibPipeWire.pw_proxy_destroy(handle)
-    _release_proxy(proxy.registry)
+    _release_proxy(proxy.parent)
     return nothing
 end
 
@@ -272,7 +378,7 @@ function bound_id(proxy::Proxy)
     end
 end
 
-roundtrip(proxy::Proxy) = roundtrip(proxy.registry)
+roundtrip(proxy::Proxy) = roundtrip(_proxy_core(proxy))
 
 """Attempt to destroy a global object through a registry."""
 function destroy_global!(registry::Registry, id::Integer)

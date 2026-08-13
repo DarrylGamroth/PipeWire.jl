@@ -216,9 +216,30 @@ end
     @test property_events[end] == (UInt32(0), "pipewire.jl.test", nothing, nothing)
     @test_throws ArgumentError set_property!(metadata, 0, "bad\0key"; value="x")
     @test_throws ArgumentError bind(registry, metadata_global, Node)
+    @test_throws ArgumentError destroy_object!(core, metadata)
+    @test isopen(metadata)
 
     close(metadata)
     @test !isopen(metadata)
+
+    created_properties = Properties(Dict("metadata.name" => "pipewire.jl.created"))
+    created = create_object(core, "metadata", Metadata; properties=created_properties)
+    @test isopen(created_properties)
+    @test isconcretetype(typeof(created))
+    @test all(isconcretetype, fieldtypes(typeof(created)))
+    @test getfield(getfield(created, :proxy), :parent) === core
+    @test_throws InvalidStateException close(core)
+    roundtrip(registry)
+    created_id = bound_id(created)
+    @test any(global_object -> global_object.id == created_id, globals(registry))
+
+    @test destroy_object!(core, created) === core
+    @test !isopen(created)
+    roundtrip(registry)
+    @test !any(global_object -> global_object.id == created_id, globals(registry))
+    close(created_properties)
+    @test_throws ArgumentError create_object(core, "bad\0factory", Metadata)
+
     close(registry)
     close(core)
     close(context)

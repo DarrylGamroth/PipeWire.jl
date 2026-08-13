@@ -10,15 +10,15 @@ mutable struct Properties <: AbstractDict{String,String}
     state_lock::ReentrantLock
 end
 
-function _validate_property_string(value::String, kind::AbstractString)
-    contains(value, '\0') && throw(ArgumentError("a PipeWire property $kind cannot contain NUL"))
+function _validate_c_string(value::String, kind::AbstractString)
+    contains(value, '\0') && throw(ArgumentError("a PipeWire $kind cannot contain NUL"))
     return value
 end
 
 function _new_properties(entries)
     pairs = Pair{String,String}[
-        _validate_property_string(String(key), "key") =>
-            _validate_property_string(String(value), "value") for (key, value) in entries
+        _validate_c_string(String(key), "property key") =>
+            _validate_c_string(String(value), "property value") for (key, value) in entries
     ]
     sort!(pairs; by=first)
     keys = first.(pairs)
@@ -53,7 +53,7 @@ Properties() = _new_properties(())
 Properties(entries) = _new_properties(entries)
 
 function Properties(serialized::AbstractString)
-    input = _validate_property_string(String(serialized), "serialization")
+    input = _validate_c_string(String(serialized), "property serialization")
     handle = GC.@preserve input LibPipeWire.pw_properties_new_string(pointer(input))
     handle == C_NULL && throw(PipeWireError(:pw_properties_new_string, -Base.Libc.errno()))
     properties = Properties(handle, ReentrantLock())
@@ -136,7 +136,7 @@ function Base.iterate(::Properties, state)
 end
 
 function Base.getindex(properties::Properties, key::AbstractString)
-    key_string = _validate_property_string(String(key), "key")
+    key_string = _validate_c_string(String(key), "property key")
     value = lock(properties.state_lock) do
         value_pointer = GC.@preserve key_string LibPipeWire.pw_properties_get(
             _require_open(properties),
@@ -149,7 +149,7 @@ function Base.getindex(properties::Properties, key::AbstractString)
 end
 
 function Base.get(properties::Properties, key::AbstractString, default)
-    key_string = _validate_property_string(String(key), "key")
+    key_string = _validate_c_string(String(key), "property key")
     value = lock(properties.state_lock) do
         value_pointer = GC.@preserve key_string LibPipeWire.pw_properties_get(
             _require_open(properties),
@@ -164,8 +164,8 @@ Base.haskey(properties::Properties, key::AbstractString) =
     get(properties, key, nothing) !== nothing
 
 function Base.setindex!(properties::Properties, value::AbstractString, key::AbstractString)
-    key_string = _validate_property_string(String(key), "key")
-    value_string = _validate_property_string(String(value), "value")
+    key_string = _validate_c_string(String(key), "property key")
+    value_string = _validate_c_string(String(value), "property value")
     result = lock(properties.state_lock) do
         GC.@preserve key_string value_string LibPipeWire.pw_properties_set(
             _require_open(properties),
@@ -178,7 +178,7 @@ function Base.setindex!(properties::Properties, value::AbstractString, key::Abst
 end
 
 function Base.delete!(properties::Properties, key::AbstractString)
-    key_string = _validate_property_string(String(key), "key")
+    key_string = _validate_c_string(String(key), "property key")
     result = lock(properties.state_lock) do
         GC.@preserve key_string LibPipeWire.pw_properties_set(
             _require_open(properties),

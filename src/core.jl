@@ -186,7 +186,8 @@ context to an internal core, primarily for embedded use and deterministic
 tests. `properties` may be a [`Properties`](@ref) value or any iterable of
 string pairs. A `Properties` argument is copied and remains open.
 
-Close every child [`Registry`](@ref) before closing the connection.
+Close every child [`Registry`](@ref), [`Stream`](@ref), and core-created proxy
+before closing the connection.
 """
 mutable struct CoreConnection
     handle::Ptr{LibPipeWire.pw_core}
@@ -194,6 +195,7 @@ mutable struct CoreConnection
     state_lock::ReentrantLock
     registry_count::Int
     stream_count::Int
+    proxy_count::Int
     listener::Base.RefValue{LibPipeWire.spa_hook}
     events::Base.RefValue{LibPipeWire.pw_core_events}
     callback_state::CoreState
@@ -235,7 +237,7 @@ function CoreConnection(context::Context; self::Bool=false, properties=nothing)
         throw(PipeWireError(:pw_core_add_listener, result))
     end
 
-    core = CoreConnection(handle, context, ReentrantLock(), 0, 0, listener, events, state)
+    core = CoreConnection(handle, context, ReentrantLock(), 0, 0, 0, listener, events, state)
     finalizer(close, core)
     return core
 end
@@ -269,6 +271,12 @@ function Base.close(core::CoreConnection)
                 :open_streams,
             ),
         )
+        core.proxy_count == 0 || throw(
+            InvalidStateException(
+                "cannot close a PipeWire core connection while created proxies are open",
+                :open_proxies,
+            ),
+        )
         handle = core.handle
         core.handle = Ptr{LibPipeWire.pw_core}(C_NULL)
         return handle
@@ -296,6 +304,22 @@ function _release_stream(core::CoreConnection)
     return lock(core.state_lock) do
         core.stream_count -= 1
         @assert core.stream_count >= 0
+        return nothing
+    end
+end
+
+function _retain_proxy(core::CoreConnection)
+    return lock(core.state_lock) do
+        handle = _require_open(core)
+        core.proxy_count += 1
+        return handle
+    end
+end
+
+function _release_proxy(core::CoreConnection)
+    return lock(core.state_lock) do
+        core.proxy_count -= 1
+        @assert core.proxy_count >= 0
         return nothing
     end
 end

@@ -1247,6 +1247,7 @@ end
 Send an owned SPA command POD to a node and return the node.
 """
 function send_command!(object::Node, command::Pod)
+    pod_value(SPA.Command, command)
     result = GC.@preserve command _with_object_handle(object, LibPipeWire.pw_node) do handle
         LibPipeWire.pw_node_send_command(
             handle,
@@ -1256,6 +1257,8 @@ function send_command!(object::Node, command::Pod)
     _check_result(:pw_node_send_command, result)
     return object
 end
+
+send_command!(object::Node, command::SPA.Command) = send_command!(object, Pod(command))
 
 function _metadata_string(value, kind)
     value === nothing && return nothing

@@ -517,3 +517,75 @@ end
     )
     @test_throws ArgumentError pod_value(SPA.Bitmap, empty_bitmap)
 end
+@testset "typed SPA parameters, commands, and events" begin
+    buffers = buffers_param(
+        buffers=4,
+        blocks=1,
+        size=4096,
+        stride=256,
+        align=16,
+        data_types=Int32(1 << PipeWire.LibPipeWire.SPA_DATA_MemPtr),
+        metadata_types=Int32(1 << PipeWire.LibPipeWire.SPA_META_Header),
+    )
+    @test buffers isa SPA.Parameter
+    @test all(isconcretetype, fieldtypes(typeof(buffers)))
+    @test buffers.object.type == PipeWire.LibPipeWire.SPA_TYPE_OBJECT_ParamBuffers
+    @test buffers.object.id == PipeWire.LibPipeWire.SPA_PARAM_Buffers
+    @test pod_value(SPA.Parameter, Pod(buffers)) == buffers
+
+    metadata = metadata_param(PipeWire.LibPipeWire.SPA_META_Header; size=64)
+    io = io_param(PipeWire.LibPipeWire.SPA_IO_Buffers; size=32)
+    @test pod_value(SPA.Parameter, Pod(metadata)) == metadata
+    @test pod_value(SPA.Parameter, Pod(io)) == io
+    @test_throws ArgumentError buffers_param(size=big(typemax(Int32)) + 1)
+
+    latency = latency_param(
+        PipeWire.LibPipeWire.SPA_DIRECTION_OUTPUT;
+        min_quantum=0.5,
+        max_quantum=2,
+        min_rate=64,
+        max_rate=256,
+        min_ns=1_000,
+        max_ns=2_000,
+    )
+    process_latency = process_latency_param(quantum=1, rate=128, ns=500)
+    tag = tag_param(
+        PipeWire.LibPipeWire.SPA_DIRECTION_INPUT,
+        ("language" => "en", "role" => "music"),
+    )
+    @test latency.object.type == PipeWire.LibPipeWire.SPA_TYPE_OBJECT_ParamLatency
+    @test process_latency.object.type ==
+          PipeWire.LibPipeWire.SPA_TYPE_OBJECT_ParamProcessLatency
+    @test tag.object.type == PipeWire.LibPipeWire.SPA_TYPE_OBJECT_ParamTag
+    @test pod_value(SPA.Parameter, Pod(latency)) == latency
+    @test pod_value(SPA.Parameter, Pod(process_latency)) == process_latency
+    @test pod_value(SPA.Parameter, Pod(tag)) == tag
+    @test_throws ArgumentError latency_param(
+        PipeWire.LibPipeWire.SPA_DIRECTION_INPUT;
+        min_quantum=Inf,
+    )
+
+    command = node_command(PipeWire.LibPipeWire.SPA_NODE_COMMAND_Start)
+    event = node_event(PipeWire.LibPipeWire.SPA_NODE_EVENT_RequestProcess)
+    @test command isa SPA.Command
+    @test event isa SPA.Event
+    @test all(isconcretetype, fieldtypes(typeof(command)))
+    @test all(isconcretetype, fieldtypes(typeof(event)))
+    @test pod_value(SPA.Command, Pod(command)) == command
+    @test pod_value(SPA.Event, Pod(event)) == event
+    @test device_command(1).object.type == PipeWire.LibPipeWire.SPA_TYPE_COMMAND_Device
+    @test device_event(1).object.type == PipeWire.LibPipeWire.SPA_TYPE_EVENT_Device
+    @test_throws ArgumentError SPA.Command(
+        SPA.Object(PipeWire.LibPipeWire.SPA_TYPE_OBJECT_Format, 0),
+    )
+    @test_throws ArgumentError SPA.Event(
+        SPA.Object(PipeWire.LibPipeWire.SPA_TYPE_OBJECT_Format, 0),
+    )
+
+    typed_audio = audio_format_param(rate=48_000, channels=2)
+    typed_video = video_format_param(size=SPA.Rectangle(1920, 1080))
+    @test typed_audio isa SPA.Parameter
+    @test typed_video isa SPA.Parameter
+    @test typed_audio.object.type == PipeWire.LibPipeWire.SPA_TYPE_OBJECT_Format
+    @test typed_video.object.type == PipeWire.LibPipeWire.SPA_TYPE_OBJECT_Format
+end

@@ -654,6 +654,8 @@ function emit_event!(stream::Stream, event::Pod)
     return stream
 end
 
+emit_event!(stream::Stream, event::SPA.Event) = emit_event!(stream, Pod(event))
+
 """
     set_error!(stream, result, message)
 

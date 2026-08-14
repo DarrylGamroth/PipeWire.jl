@@ -169,6 +169,9 @@ function Pod(value::SPA.Object)
     return _pod_from_body(UInt32(LibPipeWire.SPA_TYPE_Object), body)
 end
 
+Pod(value::Union{SPA.Parameter,SPA.Command,SPA.Event}) = Pod(value.object)
+Base.convert(::Type{Pod}, value::Union{SPA.Parameter,SPA.Command,SPA.Event}) = Pod(value)
+
 function Pod(value::SPA.Sequence)
     body = UInt8[]
     _append_bits!(body, value.unit)
@@ -540,6 +543,226 @@ function pod_value(::Type{SPA.Object}, pod::Pod)
     return SPA._owned_object(object_type, id, properties)
 end
 
+pod_value(::Type{SPA.Parameter}, pod::Pod) = SPA.Parameter(pod_value(SPA.Object, pod))
+pod_value(::Type{SPA.Command}, pod::Pod) = SPA.Command(pod_value(SPA.Object, pod))
+pod_value(::Type{SPA.Event}, pod::Pod) = SPA.Event(pod_value(SPA.Object, pod))
+
+function _parameter_int(value, description::AbstractString)
+    value isa Integer || return value
+    typemin(Int32) <= value <= typemax(Int32) ||
+        throw(ArgumentError("$description is outside Int32 range"))
+    return Int32(value)
+end
+
+function _parameter_int64(value, description::AbstractString)
+    value isa Integer || return value
+    typemin(Int64) <= value <= typemax(Int64) ||
+        throw(ArgumentError("$description is outside Int64 range"))
+    return Int64(value)
+end
+
+function _parameter_float(value, description::AbstractString)
+    value isa Real || return value
+    converted = Float32(value)
+    isfinite(converted) || throw(ArgumentError("$description must be finite"))
+    return converted
+end
+
+function _parameter_property!(properties, key, value; id::Bool=false)
+    value === nothing && return properties
+    converted = id && value isa Integer ? SPA.Id(value) : value
+    push!(properties, SPA.Property(key, converted))
+    return properties
+end
+
+"""
+    buffers_param(; buffers=nothing, blocks=nothing, size=nothing,
+                    stride=nothing, align=nothing, data_types=nothing,
+                    metadata_types=nothing, id=SPA_PARAM_Buffers)
+
+Build a typed SPA buffer-layout parameter. Integer fields use their native
+`Int32` representation; callers may also supply `SPA.Choice` values for
+negotiation.
+"""
+function buffers_param(;
+    buffers=nothing,
+    blocks=nothing,
+    size=nothing,
+    stride=nothing,
+    align=nothing,
+    data_types=nothing,
+    metadata_types=nothing,
+    id::Integer=LibPipeWire.SPA_PARAM_Buffers,
+)
+    properties = SPA.Property[]
+    for (key, value, description) in (
+        (LibPipeWire.SPA_PARAM_BUFFERS_buffers, buffers, "buffer count"),
+        (LibPipeWire.SPA_PARAM_BUFFERS_blocks, blocks, "buffer block count"),
+        (LibPipeWire.SPA_PARAM_BUFFERS_size, size, "buffer size"),
+        (LibPipeWire.SPA_PARAM_BUFFERS_stride, stride, "buffer stride"),
+        (LibPipeWire.SPA_PARAM_BUFFERS_align, align, "buffer alignment"),
+        (LibPipeWire.SPA_PARAM_BUFFERS_dataType, data_types, "buffer data-type mask"),
+        (
+            LibPipeWire.SPA_PARAM_BUFFERS_metaType,
+            metadata_types,
+            "buffer metadata-type mask",
+        ),
+    )
+        _parameter_property!(properties, key, _parameter_int(value, description))
+    end
+    return SPA.Parameter(LibPipeWire.SPA_TYPE_OBJECT_ParamBuffers, id, properties)
+end
+
+"Build a typed SPA buffer-metadata parameter."
+function metadata_param(
+    type;
+    size=nothing,
+    features=nothing,
+    id::Integer=LibPipeWire.SPA_PARAM_Meta,
+)
+    properties = SPA.Property[]
+    _parameter_property!(properties, LibPipeWire.SPA_PARAM_META_type, type; id=true)
+    _parameter_property!(
+        properties,
+        LibPipeWire.SPA_PARAM_META_size,
+        _parameter_int(size, "metadata size"),
+    )
+    _parameter_property!(
+        properties,
+        LibPipeWire.SPA_PARAM_META_features,
+        _parameter_int(features, "metadata features"),
+    )
+    return SPA.Parameter(LibPipeWire.SPA_TYPE_OBJECT_ParamMeta, id, properties)
+end
+
+"Build a typed SPA I/O-area parameter."
+function io_param(
+    type;
+    size=nothing,
+    id::Integer=LibPipeWire.SPA_PARAM_IO,
+)
+    properties = SPA.Property[]
+    _parameter_property!(properties, LibPipeWire.SPA_PARAM_IO_id, type; id=true)
+    _parameter_property!(
+        properties,
+        LibPipeWire.SPA_PARAM_IO_size,
+        _parameter_int(size, "I/O area size"),
+    )
+    return SPA.Parameter(LibPipeWire.SPA_TYPE_OBJECT_ParamIO, id, properties)
+end
+
+"Build a typed SPA latency-report parameter."
+function latency_param(
+    direction;
+    min_quantum=nothing,
+    max_quantum=nothing,
+    min_rate=nothing,
+    max_rate=nothing,
+    min_ns=nothing,
+    max_ns=nothing,
+    id::Integer=LibPipeWire.SPA_PARAM_Latency,
+)
+    properties = SPA.Property[]
+    _parameter_property!(properties, LibPipeWire.SPA_PARAM_LATENCY_direction, direction; id=true)
+    _parameter_property!(
+        properties,
+        LibPipeWire.SPA_PARAM_LATENCY_minQuantum,
+        _parameter_float(min_quantum, "minimum latency quantum"),
+    )
+    _parameter_property!(
+        properties,
+        LibPipeWire.SPA_PARAM_LATENCY_maxQuantum,
+        _parameter_float(max_quantum, "maximum latency quantum"),
+    )
+    _parameter_property!(
+        properties,
+        LibPipeWire.SPA_PARAM_LATENCY_minRate,
+        _parameter_int(min_rate, "minimum latency rate"),
+    )
+    _parameter_property!(
+        properties,
+        LibPipeWire.SPA_PARAM_LATENCY_maxRate,
+        _parameter_int(max_rate, "maximum latency rate"),
+    )
+    _parameter_property!(
+        properties,
+        LibPipeWire.SPA_PARAM_LATENCY_minNs,
+        _parameter_int64(min_ns, "minimum latency nanoseconds"),
+    )
+    _parameter_property!(
+        properties,
+        LibPipeWire.SPA_PARAM_LATENCY_maxNs,
+        _parameter_int64(max_ns, "maximum latency nanoseconds"),
+    )
+    return SPA.Parameter(LibPipeWire.SPA_TYPE_OBJECT_ParamLatency, id, properties)
+end
+
+"Build a typed SPA processing-latency parameter."
+function process_latency_param(;
+    quantum=nothing,
+    rate=nothing,
+    ns=nothing,
+    id::Integer=LibPipeWire.SPA_PARAM_ProcessLatency,
+)
+    properties = SPA.Property[]
+    _parameter_property!(
+        properties,
+        LibPipeWire.SPA_PARAM_PROCESS_LATENCY_quantum,
+        _parameter_float(quantum, "processing latency quantum"),
+    )
+    _parameter_property!(
+        properties,
+        LibPipeWire.SPA_PARAM_PROCESS_LATENCY_rate,
+        _parameter_int(rate, "processing latency rate"),
+    )
+    _parameter_property!(
+        properties,
+        LibPipeWire.SPA_PARAM_PROCESS_LATENCY_ns,
+        _parameter_int64(ns, "processing latency nanoseconds"),
+    )
+    return SPA.Parameter(LibPipeWire.SPA_TYPE_OBJECT_ParamProcessLatency, id, properties)
+end
+
+"Build a typed SPA direction-tag parameter from string pairs."
+function tag_param(
+    direction,
+    entries;
+    id::Integer=LibPipeWire.SPA_PARAM_Tag,
+)
+    pairs = collect(entries)
+    length(pairs) <= typemax(Int32) || throw(ArgumentError("the SPA tag has too many entries"))
+    fields = Pod[Pod(Int32(length(pairs)))]
+    for entry in pairs
+        push!(fields, Pod(String(first(entry))))
+        push!(fields, Pod(String(last(entry))))
+    end
+    properties = SPA.Property[
+        SPA.Property(LibPipeWire.SPA_PARAM_TAG_direction, SPA.Id(direction)),
+        SPA.Property(
+            LibPipeWire.SPA_PARAM_TAG_info,
+            SPA.Struct(fields);
+            flags=SPA.PROPERTY_HINT_DICT,
+        ),
+    ]
+    return SPA.Parameter(LibPipeWire.SPA_TYPE_OBJECT_ParamTag, id, properties)
+end
+
+"Build an owned SPA node command."
+node_command(id::Integer, properties=()) =
+    SPA.Command(LibPipeWire.SPA_TYPE_COMMAND_Node, id, properties)
+
+"Build an owned SPA device command."
+device_command(id::Integer, properties=()) =
+    SPA.Command(LibPipeWire.SPA_TYPE_COMMAND_Device, id, properties)
+
+"Build an owned SPA node event."
+node_event(id::Integer, properties=()) =
+    SPA.Event(LibPipeWire.SPA_TYPE_EVENT_Node, id, properties)
+
+"Build an owned SPA device event."
+device_event(id::Integer, properties=()) =
+    SPA.Event(LibPipeWire.SPA_TYPE_EVENT_Device, id, properties)
+
 function pod_value(::Type{SPA.Sequence}, pod::Pod)
     actual_type = pod_type(pod)
     expected_type = UInt32(LibPipeWire.SPA_TYPE_Sequence)
@@ -842,3 +1065,9 @@ function video_format(;
     )
     return Pod(SPA.Object(LibPipeWire.SPA_TYPE_OBJECT_Format, id, properties))
 end
+
+"Build a typed SPA raw-audio format parameter."
+audio_format_param(; kwargs...) = pod_value(SPA.Parameter, audio_format(; kwargs...))
+
+"Build a typed SPA raw-video format parameter."
+video_format_param(; kwargs...) = pod_value(SPA.Parameter, video_format(; kwargs...))

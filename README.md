@@ -109,6 +109,14 @@ PODs. Homogeneous arrays, heterogeneous structs, choices, and objects with
 owned properties are also supported. Timed control sequences use concrete
 `SPA.Sequence` and `SPA.Control` values.
 
+Validated object families use `SPA.Parameter`, `SPA.Command`, and `SPA.Event`.
+They convert to `Pod` automatically in managed APIs. `buffers_param`,
+`metadata_param`, `io_param`, `latency_param`, `process_latency_param`, and
+`tag_param` cover common negotiation objects; `audio_format_param` and
+`video_format_param` are typed variants of the raw-format builders.
+`node_command`, `device_command`, `node_event`, and `device_event` validate the
+object family before it reaches a native command or event entry point.
+
 Raw-video negotiation supports every PipeWire 1.6.8 pixel format and optional
 modifier, framerate, multiview, chroma, and colorimetry properties.
 

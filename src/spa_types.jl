@@ -42,11 +42,14 @@ export Array,
     CHOICE_STEP,
     Choice,
     ChoiceKind,
+    Command,
     Control,
+    Event,
     Fd,
     Fraction,
     Id,
     Object,
+    Parameter,
     PROPERTY_DONT_FIXATE,
     PROPERTY_DROP,
     PROPERTY_HARDWARE,
@@ -311,6 +314,62 @@ Base.hash(value::Object, seed::UInt) = hash((value.type, value.id, value.propert
 
 _owned_object(type::UInt32, id::UInt32, properties::Vector{Property}) =
     Object(type, id, properties, nothing)
+
+"An owned, validated SPA parameter object."
+struct Parameter
+    object::Object
+
+    function Parameter(object::Object)
+        LibPipeWire.SPA_TYPE_OBJECT_START <= object.type <
+        LibPipeWire._SPA_TYPE_OBJECT_LAST ||
+            throw(ArgumentError("the SPA object type is not a parameter type"))
+        object.id <= LibPipeWire.SPA_PARAM_PeerCapability ||
+            throw(ArgumentError("the SPA object ID is not a parameter ID"))
+        return new(object)
+    end
+end
+
+Parameter(type::Integer, id::Integer, properties) = Parameter(Object(type, id, properties))
+Parameter(type::Integer, id::Integer, properties::Property...) =
+    Parameter(Object(type, id, properties))
+
+"An owned, validated SPA command object."
+struct Command
+    object::Object
+
+    function Command(object::Object)
+        LibPipeWire.SPA_TYPE_COMMAND_START < object.type <
+        LibPipeWire._SPA_TYPE_COMMAND_LAST ||
+            throw(ArgumentError("the SPA object type is not a command type"))
+        return new(object)
+    end
+end
+
+Command(type::Integer, id::Integer, properties) = Command(Object(type, id, properties))
+Command(type::Integer, id::Integer, properties::Property...) =
+    Command(Object(type, id, properties))
+
+"An owned, validated SPA event object."
+struct Event
+    object::Object
+
+    function Event(object::Object)
+        LibPipeWire.SPA_TYPE_EVENT_START < object.type < LibPipeWire._SPA_TYPE_EVENT_LAST ||
+            throw(ArgumentError("the SPA object type is not an event type"))
+        return new(object)
+    end
+end
+
+Event(type::Integer, id::Integer, properties) = Event(Object(type, id, properties))
+Event(type::Integer, id::Integer, properties::Property...) = Event(Object(type, id, properties))
+
+for Type in (Parameter, Command, Event)
+    @eval begin
+        Base.:(==)(left::$Type, right::$Type) = left.object == right.object
+        Base.isequal(left::$Type, right::$Type) = isequal(left.object, right.object)
+        Base.hash(value::$Type, seed::UInt) = hash(value.object, seed)
+    end
+end
 
 "An owned timed control carried by an SPA POD sequence."
 struct Control

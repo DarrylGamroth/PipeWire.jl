@@ -497,168 +497,6 @@ const SPA_PARAM_AVAILABILITY_unknown = 0 % UInt32
 const SPA_PARAM_AVAILABILITY_no = 1 % UInt32
 const SPA_PARAM_AVAILABILITY_yes = 2 % UInt32
 
-"""
-    spa_param_buffers
-
-properties for SPA\\_TYPE\\_OBJECT\\_ParamBuffers
-
-| Enumerator                       | Note                                                                            |
-| :------------------------------- | :------------------------------------------------------------------------------ |
-| SPA\\_PARAM\\_BUFFERS\\_buffers  | number of buffers (Int)                                                         |
-| SPA\\_PARAM\\_BUFFERS\\_blocks   | number of data blocks per buffer (Int)                                          |
-| SPA\\_PARAM\\_BUFFERS\\_size     | size of a data block memory (Int)                                               |
-| SPA\\_PARAM\\_BUFFERS\\_stride   | stride of data block memory (Int)                                               |
-| SPA\\_PARAM\\_BUFFERS\\_align    | alignment of data block memory (Int)                                            |
-| SPA\\_PARAM\\_BUFFERS\\_dataType | possible memory types (flags choice Int, mask of enum [`spa_data_type`](@ref))  |
-| SPA\\_PARAM\\_BUFFERS\\_metaType | required meta data types (Int, mask of enum [`spa_meta_type`](@ref))            |
-"""
-const spa_param_buffers = UInt32
-const SPA_PARAM_BUFFERS_START = 0 % UInt32
-const SPA_PARAM_BUFFERS_buffers = 1 % UInt32
-const SPA_PARAM_BUFFERS_blocks = 2 % UInt32
-const SPA_PARAM_BUFFERS_size = 3 % UInt32
-const SPA_PARAM_BUFFERS_stride = 4 % UInt32
-const SPA_PARAM_BUFFERS_align = 5 % UInt32
-const SPA_PARAM_BUFFERS_dataType = 6 % UInt32
-const SPA_PARAM_BUFFERS_metaType = 7 % UInt32
-
-"""
-    spa_param_meta
-
-properties for SPA\\_TYPE\\_OBJECT\\_ParamMeta
-
-| Enumerator                    | Note                                                                                 |
-| :---------------------------- | :----------------------------------------------------------------------------------- |
-| SPA\\_PARAM\\_META\\_type     | the metadata, one of enum [`spa_meta_type`](@ref) (Id enum [`spa_meta_type`](@ref))  |
-| SPA\\_PARAM\\_META\\_size     | the expected maximum size the meta (Int)                                             |
-| SPA\\_PARAM\\_META\\_features | meta data features (Features Int)                                                    |
-"""
-const spa_param_meta = UInt32
-const SPA_PARAM_META_START = 0 % UInt32
-const SPA_PARAM_META_type = 1 % UInt32
-const SPA_PARAM_META_size = 2 % UInt32
-const SPA_PARAM_META_features = 3 % UInt32
-
-"""
-    spa_param_io
-
-properties for SPA\\_TYPE\\_OBJECT\\_ParamIO
-
-| Enumerator              | Note                                                                      |
-| :---------------------- | :------------------------------------------------------------------------ |
-| SPA\\_PARAM\\_IO\\_id   | type ID, uniquely identifies the io area (Id enum [`spa_io_type`](@ref))  |
-| SPA\\_PARAM\\_IO\\_size | size of the io area (Int)                                                 |
-"""
-const spa_param_io = UInt32
-const SPA_PARAM_IO_START = 0 % UInt32
-const SPA_PARAM_IO_id = 1 % UInt32
-const SPA_PARAM_IO_size = 2 % UInt32
-
-"""
-    spa_param_profile
-
-properties for SPA\\_TYPE\\_OBJECT\\_ParamProfile
-
-| Enumerator                          | Note                                                                                                                                                                                                                                     |
-| :---------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| SPA\\_PARAM\\_PROFILE\\_index       | profile index (Int)                                                                                                                                                                                                                      |
-| SPA\\_PARAM\\_PROFILE\\_name        | profile name (String)                                                                                                                                                                                                                    |
-| SPA\\_PARAM\\_PROFILE\\_description | profile description (String)                                                                                                                                                                                                             |
-| SPA\\_PARAM\\_PROFILE\\_priority    | profile priority (Int)                                                                                                                                                                                                                   |
-| SPA\\_PARAM\\_PROFILE\\_available   | availability of the profile (Id enum [`spa_param_availability`](@ref))                                                                                                                                                                   |
-| SPA\\_PARAM\\_PROFILE\\_info        | info (Struct(	Int : n\\_items,	(String : key,	String : value)*))                                                                                                                                                                            |
-| SPA\\_PARAM\\_PROFILE\\_classes     | node classes provided by this profile (Struct(	Int : number of items following Struct( String : class name (eg. "Audio/Source"), Int : number of nodes String : property (eg. "card.profile.devices"), Array of Int: device indexes )*))  |
-| SPA\\_PARAM\\_PROFILE\\_save        | If profile should be saved (Bool)                                                                                                                                                                                                        |
-"""
-const spa_param_profile = UInt32
-const SPA_PARAM_PROFILE_START = 0 % UInt32
-const SPA_PARAM_PROFILE_index = 1 % UInt32
-const SPA_PARAM_PROFILE_name = 2 % UInt32
-const SPA_PARAM_PROFILE_description = 3 % UInt32
-const SPA_PARAM_PROFILE_priority = 4 % UInt32
-const SPA_PARAM_PROFILE_available = 5 % UInt32
-const SPA_PARAM_PROFILE_info = 6 % UInt32
-const SPA_PARAM_PROFILE_classes = 7 % UInt32
-const SPA_PARAM_PROFILE_save = 8 % UInt32
-
-"""
-    spa_param_port_config_mode
-
-` spa_param`
-
-\\{
-
-| Enumerator                                       | Note                                                                                                                                        |
-| :----------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------ |
-| SPA\\_PARAM\\_PORT\\_CONFIG\\_MODE\\_none        | no configuration                                                                                                                            |
-| SPA\\_PARAM\\_PORT\\_CONFIG\\_MODE\\_passthrough | passthrough configuration                                                                                                                   |
-| SPA\\_PARAM\\_PORT\\_CONFIG\\_MODE\\_convert     | convert configuration                                                                                                                       |
-| SPA\\_PARAM\\_PORT\\_CONFIG\\_MODE\\_dsp         | dsp configuration, depending on the external format. For audio, ports will be configured for the given number of channels with F32 format.  |
-"""
-const spa_param_port_config_mode = UInt32
-const SPA_PARAM_PORT_CONFIG_MODE_none = 0 % UInt32
-const SPA_PARAM_PORT_CONFIG_MODE_passthrough = 1 % UInt32
-const SPA_PARAM_PORT_CONFIG_MODE_convert = 2 % UInt32
-const SPA_PARAM_PORT_CONFIG_MODE_dsp = 3 % UInt32
-
-"""
-    spa_param_port_config
-
-properties for SPA\\_TYPE\\_OBJECT\\_ParamPortConfig
-
-| Enumerator                              | Note                                                 |
-| :-------------------------------------- | :--------------------------------------------------- |
-| SPA\\_PARAM\\_PORT\\_CONFIG\\_direction | (Id enum [`spa_direction`](@ref)) direction          |
-| SPA\\_PARAM\\_PORT\\_CONFIG\\_mode      | (Id enum [`spa_param_port_config_mode`](@ref)) mode  |
-| SPA\\_PARAM\\_PORT\\_CONFIG\\_monitor   | (Bool) enable monitor output ports on input ports    |
-| SPA\\_PARAM\\_PORT\\_CONFIG\\_control   | (Bool) enable control ports                          |
-| SPA\\_PARAM\\_PORT\\_CONFIG\\_format    | (Object) format filter                               |
-"""
-const spa_param_port_config = UInt32
-const SPA_PARAM_PORT_CONFIG_START = 0 % UInt32
-const SPA_PARAM_PORT_CONFIG_direction = 1 % UInt32
-const SPA_PARAM_PORT_CONFIG_mode = 2 % UInt32
-const SPA_PARAM_PORT_CONFIG_monitor = 3 % UInt32
-const SPA_PARAM_PORT_CONFIG_control = 4 % UInt32
-const SPA_PARAM_PORT_CONFIG_format = 5 % UInt32
-
-"""
-    spa_param_route
-
-properties for SPA\\_TYPE\\_OBJECT\\_ParamRoute
-
-| Enumerator                        | Note                                                                        |
-| :-------------------------------- | :-------------------------------------------------------------------------- |
-| SPA\\_PARAM\\_ROUTE\\_index       | index of the routing destination (Int)                                      |
-| SPA\\_PARAM\\_ROUTE\\_direction   | direction, input/output (Id enum [`spa_direction`](@ref))                   |
-| SPA\\_PARAM\\_ROUTE\\_device      | device id (Int)                                                             |
-| SPA\\_PARAM\\_ROUTE\\_name        | name of the routing destination (String)                                    |
-| SPA\\_PARAM\\_ROUTE\\_description | description of the destination (String)                                     |
-| SPA\\_PARAM\\_ROUTE\\_priority    | priority of the destination (Int)                                           |
-| SPA\\_PARAM\\_ROUTE\\_available   | availability of the destination (Id enum [`spa_param_availability`](@ref))  |
-| SPA\\_PARAM\\_ROUTE\\_info        | info (Struct(	Int : n\\_items,	(String : key,	String : value)*))               |
-| SPA\\_PARAM\\_ROUTE\\_profiles    | associated profile indexes (Array of Int)                                   |
-| SPA\\_PARAM\\_ROUTE\\_props       | properties SPA\\_TYPE\\_OBJECT\\_Props                                      |
-| SPA\\_PARAM\\_ROUTE\\_devices     | associated device indexes (Array of Int)                                    |
-| SPA\\_PARAM\\_ROUTE\\_profile     | profile id (Int)                                                            |
-| SPA\\_PARAM\\_ROUTE\\_save        | If route should be saved (Bool)                                             |
-"""
-const spa_param_route = UInt32
-const SPA_PARAM_ROUTE_START = 0 % UInt32
-const SPA_PARAM_ROUTE_index = 1 % UInt32
-const SPA_PARAM_ROUTE_direction = 2 % UInt32
-const SPA_PARAM_ROUTE_device = 3 % UInt32
-const SPA_PARAM_ROUTE_name = 4 % UInt32
-const SPA_PARAM_ROUTE_description = 5 % UInt32
-const SPA_PARAM_ROUTE_priority = 6 % UInt32
-const SPA_PARAM_ROUTE_available = 7 % UInt32
-const SPA_PARAM_ROUTE_info = 8 % UInt32
-const SPA_PARAM_ROUTE_profiles = 9 % UInt32
-const SPA_PARAM_ROUTE_props = 10 % UInt32
-const SPA_PARAM_ROUTE_devices = 11 % UInt32
-const SPA_PARAM_ROUTE_profile = 12 % UInt32
-const SPA_PARAM_ROUTE_save = 13 % UInt32
-
 struct spa_strbuf
     buffer::Cstring
     maxsize::Csize_t
@@ -6548,18 +6386,18 @@ mutable struct pw_filter end
 
 Different IO area types
 
-| Enumerator              | Note                                                                                                                    |
-| :---------------------- | :---------------------------------------------------------------------------------------------------------------------- |
-| SPA\\_IO\\_Buffers      | area to exchange buffers, struct [`spa_io_buffers`](@ref)                                                               |
-| SPA\\_IO\\_Range        | expected byte range, struct [`spa_io_range`](@ref) (currently not used in PipeWire)                                     |
-| SPA\\_IO\\_Clock        | area to update clock information, struct [`spa_io_clock`](@ref)                                                         |
-| SPA\\_IO\\_Latency      | latency reporting, struct [`spa_io_latency`](@ref) (currently not used in PipeWire).  # See also spa\\_param\\_latency  |
-| SPA\\_IO\\_Control      | area for control messages, struct [`spa_io_sequence`](@ref)                                                             |
-| SPA\\_IO\\_Notify       | area for notify messages, struct [`spa_io_sequence`](@ref)                                                              |
-| SPA\\_IO\\_Position     | position information in the graph, struct [`spa_io_position`](@ref)                                                     |
-| SPA\\_IO\\_RateMatch    | rate matching between nodes, struct [`spa_io_rate_match`](@ref)                                                         |
-| SPA\\_IO\\_Memory       | memory pointer, struct [`spa_io_memory`](@ref) (currently not used in PipeWire)                                         |
-| SPA\\_IO\\_AsyncBuffers | async area to exchange buffers, struct [`spa_io_async_buffers`](@ref)                                                   |
+| Enumerator              | Note                                                                                                                          |
+| :---------------------- | :---------------------------------------------------------------------------------------------------------------------------- |
+| SPA\\_IO\\_Buffers      | area to exchange buffers, struct [`spa_io_buffers`](@ref)                                                                     |
+| SPA\\_IO\\_Range        | expected byte range, struct [`spa_io_range`](@ref) (currently not used in PipeWire)                                           |
+| SPA\\_IO\\_Clock        | area to update clock information, struct [`spa_io_clock`](@ref)                                                               |
+| SPA\\_IO\\_Latency      | latency reporting, struct [`spa_io_latency`](@ref) (currently not used in PipeWire).  # See also [`spa_param_latency`](@ref)  |
+| SPA\\_IO\\_Control      | area for control messages, struct [`spa_io_sequence`](@ref)                                                                   |
+| SPA\\_IO\\_Notify       | area for notify messages, struct [`spa_io_sequence`](@ref)                                                                    |
+| SPA\\_IO\\_Position     | position information in the graph, struct [`spa_io_position`](@ref)                                                           |
+| SPA\\_IO\\_RateMatch    | rate matching between nodes, struct [`spa_io_rate_match`](@ref)                                                               |
+| SPA\\_IO\\_Memory       | memory pointer, struct [`spa_io_memory`](@ref) (currently not used in PipeWire)                                               |
+| SPA\\_IO\\_AsyncBuffers | async area to exchange buffers, struct [`spa_io_async_buffers`](@ref)                                                         |
 """
 const spa_io_type = UInt32
 const SPA_IO_Invalid = 0 % UInt32
@@ -6721,7 +6559,7 @@ Currently not used in PipeWire. Instead,
 | min   | min latency       |
 | max   | max latency       |
 # See also
-spa\\_param\\_latency
+[`spa_param_latency`](@ref)
 """
 struct spa_io_latency
     rate::spa_fraction
@@ -8213,6 +8051,387 @@ struct pw_profiler_methods
 end
 
 """
+    spa_param_buffers
+
+properties for SPA\\_TYPE\\_OBJECT\\_ParamBuffers
+
+| Enumerator                       | Note                                                                            |
+| :------------------------------- | :------------------------------------------------------------------------------ |
+| SPA\\_PARAM\\_BUFFERS\\_buffers  | number of buffers (Int)                                                         |
+| SPA\\_PARAM\\_BUFFERS\\_blocks   | number of data blocks per buffer (Int)                                          |
+| SPA\\_PARAM\\_BUFFERS\\_size     | size of a data block memory (Int)                                               |
+| SPA\\_PARAM\\_BUFFERS\\_stride   | stride of data block memory (Int)                                               |
+| SPA\\_PARAM\\_BUFFERS\\_align    | alignment of data block memory (Int)                                            |
+| SPA\\_PARAM\\_BUFFERS\\_dataType | possible memory types (flags choice Int, mask of enum [`spa_data_type`](@ref))  |
+| SPA\\_PARAM\\_BUFFERS\\_metaType | required meta data types (Int, mask of enum [`spa_meta_type`](@ref))            |
+"""
+const spa_param_buffers = UInt32
+const SPA_PARAM_BUFFERS_START = 0 % UInt32
+const SPA_PARAM_BUFFERS_buffers = 1 % UInt32
+const SPA_PARAM_BUFFERS_blocks = 2 % UInt32
+const SPA_PARAM_BUFFERS_size = 3 % UInt32
+const SPA_PARAM_BUFFERS_stride = 4 % UInt32
+const SPA_PARAM_BUFFERS_align = 5 % UInt32
+const SPA_PARAM_BUFFERS_dataType = 6 % UInt32
+const SPA_PARAM_BUFFERS_metaType = 7 % UInt32
+
+"""
+    spa_param_meta
+
+properties for SPA\\_TYPE\\_OBJECT\\_ParamMeta
+
+| Enumerator                    | Note                                                                                 |
+| :---------------------------- | :----------------------------------------------------------------------------------- |
+| SPA\\_PARAM\\_META\\_type     | the metadata, one of enum [`spa_meta_type`](@ref) (Id enum [`spa_meta_type`](@ref))  |
+| SPA\\_PARAM\\_META\\_size     | the expected maximum size the meta (Int)                                             |
+| SPA\\_PARAM\\_META\\_features | meta data features (Features Int)                                                    |
+"""
+const spa_param_meta = UInt32
+const SPA_PARAM_META_START = 0 % UInt32
+const SPA_PARAM_META_type = 1 % UInt32
+const SPA_PARAM_META_size = 2 % UInt32
+const SPA_PARAM_META_features = 3 % UInt32
+
+"""
+    spa_param_io
+
+properties for SPA\\_TYPE\\_OBJECT\\_ParamIO
+
+| Enumerator              | Note                                                                      |
+| :---------------------- | :------------------------------------------------------------------------ |
+| SPA\\_PARAM\\_IO\\_id   | type ID, uniquely identifies the io area (Id enum [`spa_io_type`](@ref))  |
+| SPA\\_PARAM\\_IO\\_size | size of the io area (Int)                                                 |
+"""
+const spa_param_io = UInt32
+const SPA_PARAM_IO_START = 0 % UInt32
+const SPA_PARAM_IO_id = 1 % UInt32
+const SPA_PARAM_IO_size = 2 % UInt32
+
+"""
+    spa_param_latency
+
+Properties for SPA\\_TYPE\\_OBJECT\\_ParamLatency
+
+The latency indicates:
+
+- for playback: time delay between start of a graph cycle, and the rendering of the first sample of that cycle in audio output.
+
+- for capture: time delay between start of a graph cycle, and the first sample of that cycle having occurred in audio input.
+
+For physical output/input, the latency is intended to correspond to the rendering/capture of physical audio, including hardware internal rendering delay.
+
+The latency values are adjusted by SPA_PROP_latencyOffsetNsec or SPA\\_PARAM\\_ProcessLatency, if present. (e.g. for ALSA this is used to adjust for the internal hardware latency).
+
+| Enumerator                         | Note                                                       |
+| :--------------------------------- | :--------------------------------------------------------- |
+| SPA\\_PARAM\\_LATENCY\\_direction  | direction, input/output (Id enum [`spa_direction`](@ref))  |
+| SPA\\_PARAM\\_LATENCY\\_minQuantum | min latency relative to quantum (Float)                    |
+| SPA\\_PARAM\\_LATENCY\\_maxQuantum | max latency relative to quantum (Float)                    |
+| SPA\\_PARAM\\_LATENCY\\_minRate    | min latency (Int) relative to graph rate                   |
+| SPA\\_PARAM\\_LATENCY\\_maxRate    | max latency (Int) relative to graph rate                   |
+| SPA\\_PARAM\\_LATENCY\\_minNs      | min latency (Long) in nanoseconds                          |
+| SPA\\_PARAM\\_LATENCY\\_maxNs      | max latency (Long) in nanoseconds                          |
+"""
+const spa_param_latency = UInt32
+const SPA_PARAM_LATENCY_START = 0 % UInt32
+const SPA_PARAM_LATENCY_direction = 1 % UInt32
+const SPA_PARAM_LATENCY_minQuantum = 2 % UInt32
+const SPA_PARAM_LATENCY_maxQuantum = 3 % UInt32
+const SPA_PARAM_LATENCY_minRate = 4 % UInt32
+const SPA_PARAM_LATENCY_maxRate = 5 % UInt32
+const SPA_PARAM_LATENCY_minNs = 6 % UInt32
+const SPA_PARAM_LATENCY_maxNs = 7 % UInt32
+
+"""
+    spa_latency_info
+
+helper structure for managing latency objects
+"""
+struct spa_latency_info
+    direction::spa_direction
+    min_quantum::Cfloat
+    max_quantum::Cfloat
+    min_rate::Int32
+    max_rate::Int32
+    min_ns::Int64
+    max_ns::Int64
+end
+
+"""
+    spa_param_process_latency
+
+Properties for SPA\\_TYPE\\_OBJECT\\_ParamProcessLatency
+
+The processing latency indicates logical time delay between a sample in an input port, and a corresponding sample in an output port, relative to the graph time.
+
+| Enumerator                                | Note                                  |
+| :---------------------------------------- | :------------------------------------ |
+| SPA\\_PARAM\\_PROCESS\\_LATENCY\\_quantum | latency relative to quantum (Float)   |
+| SPA\\_PARAM\\_PROCESS\\_LATENCY\\_rate    | latency (Int) relative to graph rate  |
+| SPA\\_PARAM\\_PROCESS\\_LATENCY\\_ns      | latency (Long) in nanoseconds         |
+"""
+const spa_param_process_latency = UInt32
+const SPA_PARAM_PROCESS_LATENCY_START = 0 % UInt32
+const SPA_PARAM_PROCESS_LATENCY_quantum = 1 % UInt32
+const SPA_PARAM_PROCESS_LATENCY_rate = 2 % UInt32
+const SPA_PARAM_PROCESS_LATENCY_ns = 3 % UInt32
+
+"""
+    spa_process_latency_info
+
+Helper structure for managing process latency objects
+"""
+struct spa_process_latency_info
+    quantum::Cfloat
+    rate::Int32
+    ns::Int64
+end
+
+"""
+    spa_param_port_config_mode
+
+` spa_param`
+
+\\{
+
+| Enumerator                                       | Note                                                                                                                                        |
+| :----------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------ |
+| SPA\\_PARAM\\_PORT\\_CONFIG\\_MODE\\_none        | no configuration                                                                                                                            |
+| SPA\\_PARAM\\_PORT\\_CONFIG\\_MODE\\_passthrough | passthrough configuration                                                                                                                   |
+| SPA\\_PARAM\\_PORT\\_CONFIG\\_MODE\\_convert     | convert configuration                                                                                                                       |
+| SPA\\_PARAM\\_PORT\\_CONFIG\\_MODE\\_dsp         | dsp configuration, depending on the external format. For audio, ports will be configured for the given number of channels with F32 format.  |
+"""
+const spa_param_port_config_mode = UInt32
+const SPA_PARAM_PORT_CONFIG_MODE_none = 0 % UInt32
+const SPA_PARAM_PORT_CONFIG_MODE_passthrough = 1 % UInt32
+const SPA_PARAM_PORT_CONFIG_MODE_convert = 2 % UInt32
+const SPA_PARAM_PORT_CONFIG_MODE_dsp = 3 % UInt32
+
+"""
+    spa_param_port_config
+
+properties for SPA\\_TYPE\\_OBJECT\\_ParamPortConfig
+
+| Enumerator                              | Note                                                 |
+| :-------------------------------------- | :--------------------------------------------------- |
+| SPA\\_PARAM\\_PORT\\_CONFIG\\_direction | (Id enum [`spa_direction`](@ref)) direction          |
+| SPA\\_PARAM\\_PORT\\_CONFIG\\_mode      | (Id enum [`spa_param_port_config_mode`](@ref)) mode  |
+| SPA\\_PARAM\\_PORT\\_CONFIG\\_monitor   | (Bool) enable monitor output ports on input ports    |
+| SPA\\_PARAM\\_PORT\\_CONFIG\\_control   | (Bool) enable control ports                          |
+| SPA\\_PARAM\\_PORT\\_CONFIG\\_format    | (Object) format filter                               |
+"""
+const spa_param_port_config = UInt32
+const SPA_PARAM_PORT_CONFIG_START = 0 % UInt32
+const SPA_PARAM_PORT_CONFIG_direction = 1 % UInt32
+const SPA_PARAM_PORT_CONFIG_mode = 2 % UInt32
+const SPA_PARAM_PORT_CONFIG_monitor = 3 % UInt32
+const SPA_PARAM_PORT_CONFIG_control = 4 % UInt32
+const SPA_PARAM_PORT_CONFIG_format = 5 % UInt32
+
+"""
+    spa_param_profile
+
+properties for SPA\\_TYPE\\_OBJECT\\_ParamProfile
+
+| Enumerator                          | Note                                                                                                                                                                                                                                     |
+| :---------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SPA\\_PARAM\\_PROFILE\\_index       | profile index (Int)                                                                                                                                                                                                                      |
+| SPA\\_PARAM\\_PROFILE\\_name        | profile name (String)                                                                                                                                                                                                                    |
+| SPA\\_PARAM\\_PROFILE\\_description | profile description (String)                                                                                                                                                                                                             |
+| SPA\\_PARAM\\_PROFILE\\_priority    | profile priority (Int)                                                                                                                                                                                                                   |
+| SPA\\_PARAM\\_PROFILE\\_available   | availability of the profile (Id enum [`spa_param_availability`](@ref))                                                                                                                                                                   |
+| SPA\\_PARAM\\_PROFILE\\_info        | info (Struct(	Int : n\\_items,	(String : key,	String : value)*))                                                                                                                                                                            |
+| SPA\\_PARAM\\_PROFILE\\_classes     | node classes provided by this profile (Struct(	Int : number of items following Struct( String : class name (eg. "Audio/Source"), Int : number of nodes String : property (eg. "card.profile.devices"), Array of Int: device indexes )*))  |
+| SPA\\_PARAM\\_PROFILE\\_save        | If profile should be saved (Bool)                                                                                                                                                                                                        |
+"""
+const spa_param_profile = UInt32
+const SPA_PARAM_PROFILE_START = 0 % UInt32
+const SPA_PARAM_PROFILE_index = 1 % UInt32
+const SPA_PARAM_PROFILE_name = 2 % UInt32
+const SPA_PARAM_PROFILE_description = 3 % UInt32
+const SPA_PARAM_PROFILE_priority = 4 % UInt32
+const SPA_PARAM_PROFILE_available = 5 % UInt32
+const SPA_PARAM_PROFILE_info = 6 % UInt32
+const SPA_PARAM_PROFILE_classes = 7 % UInt32
+const SPA_PARAM_PROFILE_save = 8 % UInt32
+
+"""
+    spa_prop_info
+
+properties of SPA\\_TYPE\\_OBJECT\\_PropInfo
+
+| Enumerator                      | Note                                                                                                                                                                                  |
+| :------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| SPA\\_PROP\\_INFO\\_id          | associated id of the property                                                                                                                                                         |
+| SPA\\_PROP\\_INFO\\_name        | name of the property                                                                                                                                                                  |
+| SPA\\_PROP\\_INFO\\_type        | type and range/enums of property                                                                                                                                                      |
+| SPA\\_PROP\\_INFO\\_labels      | labels of property if any, this is a struct with pairs of values, the first one is of the type of the property, the second one is a string with a user readable label for the value.  |
+| SPA\\_PROP\\_INFO\\_container   | type of container if any (Id)                                                                                                                                                         |
+| SPA\\_PROP\\_INFO\\_params      | is part of params property (Bool)                                                                                                                                                     |
+| SPA\\_PROP\\_INFO\\_description | User readable description                                                                                                                                                             |
+"""
+const spa_prop_info = UInt32
+const SPA_PROP_INFO_START = 0 % UInt32
+const SPA_PROP_INFO_id = 1 % UInt32
+const SPA_PROP_INFO_name = 2 % UInt32
+const SPA_PROP_INFO_type = 3 % UInt32
+const SPA_PROP_INFO_labels = 4 % UInt32
+const SPA_PROP_INFO_container = 5 % UInt32
+const SPA_PROP_INFO_params = 6 % UInt32
+const SPA_PROP_INFO_description = 7 % UInt32
+
+"""
+    spa_prop
+
+predefined properties for SPA\\_TYPE\\_OBJECT\\_Props
+
+| Enumerator                         | Note                                                                                                                                                                                                                                  |
+| :--------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| SPA\\_PROP\\_unknown               | an unknown property                                                                                                                                                                                                                   |
+| SPA\\_PROP\\_START\\_Device        | device related properties                                                                                                                                                                                                             |
+| SPA\\_PROP\\_START\\_Audio         | audio related properties                                                                                                                                                                                                              |
+| SPA\\_PROP\\_volume                | a volume (Float), 0.0 silence, 1.0 no attenutation                                                                                                                                                                                    |
+| SPA\\_PROP\\_mute                  | mute (Bool)                                                                                                                                                                                                                           |
+| SPA\\_PROP\\_channelVolumes        | a volume array, one (linear) volume per channel (Array of Float). 0.0 is silence, 1.0 is without attenuation. This is the effective volume that is applied. It can result in a hardware volume and software volume (see softVolumes)  |
+| SPA\\_PROP\\_volumeBase            | a volume base (Float)                                                                                                                                                                                                                 |
+| SPA\\_PROP\\_volumeStep            | a volume step (Float)                                                                                                                                                                                                                 |
+| SPA\\_PROP\\_channelMap            | a channelmap array (Array (Id enum [`spa_audio_channel`](@ref)))                                                                                                                                                                      |
+| SPA\\_PROP\\_monitorMute           | mute (Bool)                                                                                                                                                                                                                           |
+| SPA\\_PROP\\_monitorVolumes        | a volume array, one (linear) volume per channel (Array of Float)                                                                                                                                                                      |
+| SPA\\_PROP\\_latencyOffsetNsec     | delay adjustment                                                                                                                                                                                                                      |
+| SPA\\_PROP\\_softMute              | mute (Bool) applied in software                                                                                                                                                                                                       |
+| SPA\\_PROP\\_softVolumes           | a volume array, one (linear) volume per channel (Array of Float). 0.0 is silence, 1.0 is without attenuation. This is the volume applied in software, there might be a part applied in hardware.                                      |
+| SPA\\_PROP\\_iec958Codecs          | enabled IEC958 (S/PDIF) codecs, (Array (Id enum [`spa_audio_iec958_codec`](@ref))                                                                                                                                                     |
+| SPA\\_PROP\\_volumeRampSamples     | Samples to ramp the volume over                                                                                                                                                                                                       |
+| SPA\\_PROP\\_volumeRampStepSamples | Step or incremental Samples to ramp the volume over                                                                                                                                                                                   |
+| SPA\\_PROP\\_volumeRampTime        | Time in millisec to ramp the volume over                                                                                                                                                                                              |
+| SPA\\_PROP\\_volumeRampStepTime    | Step or incremental Time in nano seconds to ramp the                                                                                                                                                                                  |
+| SPA\\_PROP\\_volumeRampScale       | the scale or graph to used to ramp the volume                                                                                                                                                                                         |
+| SPA\\_PROP\\_START\\_Video         | video related properties                                                                                                                                                                                                              |
+| SPA\\_PROP\\_START\\_Other         | other properties                                                                                                                                                                                                                      |
+| SPA\\_PROP\\_params                | simple control params (Struct(	(String : key,	Pod : value)*))                                                                                                                                                                           |
+"""
+const spa_prop = UInt32
+const SPA_PROP_START = 0 % UInt32
+const SPA_PROP_unknown = 1 % UInt32
+const SPA_PROP_START_Device = 256 % UInt32
+const SPA_PROP_device = 257 % UInt32
+const SPA_PROP_deviceName = 258 % UInt32
+const SPA_PROP_deviceFd = 259 % UInt32
+const SPA_PROP_card = 260 % UInt32
+const SPA_PROP_cardName = 261 % UInt32
+const SPA_PROP_minLatency = 262 % UInt32
+const SPA_PROP_maxLatency = 263 % UInt32
+const SPA_PROP_periods = 264 % UInt32
+const SPA_PROP_periodSize = 265 % UInt32
+const SPA_PROP_periodEvent = 266 % UInt32
+const SPA_PROP_live = 267 % UInt32
+const SPA_PROP_rate = 268 % UInt32
+const SPA_PROP_quality = 269 % UInt32
+const SPA_PROP_bluetoothAudioCodec = 270 % UInt32
+const SPA_PROP_bluetoothOffloadActive = 271 % UInt32
+const SPA_PROP_clockId = 272 % UInt32
+const SPA_PROP_clockDevice = 273 % UInt32
+const SPA_PROP_clockInterface = 274 % UInt32
+const SPA_PROP_START_Audio = 65536 % UInt32
+const SPA_PROP_waveType = 65537 % UInt32
+const SPA_PROP_frequency = 65538 % UInt32
+const SPA_PROP_volume = 65539 % UInt32
+const SPA_PROP_mute = 65540 % UInt32
+const SPA_PROP_patternType = 65541 % UInt32
+const SPA_PROP_ditherType = 65542 % UInt32
+const SPA_PROP_truncate = 65543 % UInt32
+const SPA_PROP_channelVolumes = 65544 % UInt32
+const SPA_PROP_volumeBase = 65545 % UInt32
+const SPA_PROP_volumeStep = 65546 % UInt32
+const SPA_PROP_channelMap = 65547 % UInt32
+const SPA_PROP_monitorMute = 65548 % UInt32
+const SPA_PROP_monitorVolumes = 65549 % UInt32
+const SPA_PROP_latencyOffsetNsec = 65550 % UInt32
+const SPA_PROP_softMute = 65551 % UInt32
+const SPA_PROP_softVolumes = 65552 % UInt32
+const SPA_PROP_iec958Codecs = 65553 % UInt32
+const SPA_PROP_volumeRampSamples = 65554 % UInt32
+const SPA_PROP_volumeRampStepSamples = 65555 % UInt32
+const SPA_PROP_volumeRampTime = 65556 % UInt32
+const SPA_PROP_volumeRampStepTime = 65557 % UInt32
+const SPA_PROP_volumeRampScale = 65558 % UInt32
+const SPA_PROP_START_Video = 131072 % UInt32
+const SPA_PROP_brightness = 131073 % UInt32
+const SPA_PROP_contrast = 131074 % UInt32
+const SPA_PROP_saturation = 131075 % UInt32
+const SPA_PROP_hue = 131076 % UInt32
+const SPA_PROP_gamma = 131077 % UInt32
+const SPA_PROP_exposure = 131078 % UInt32
+const SPA_PROP_gain = 131079 % UInt32
+const SPA_PROP_sharpness = 131080 % UInt32
+const SPA_PROP_START_Other = 524288 % UInt32
+const SPA_PROP_params = 524289 % UInt32
+const SPA_PROP_START_CUSTOM = 16777216 % UInt32
+
+"""
+    spa_param_route
+
+properties for SPA\\_TYPE\\_OBJECT\\_ParamRoute
+
+| Enumerator                        | Note                                                                        |
+| :-------------------------------- | :-------------------------------------------------------------------------- |
+| SPA\\_PARAM\\_ROUTE\\_index       | index of the routing destination (Int)                                      |
+| SPA\\_PARAM\\_ROUTE\\_direction   | direction, input/output (Id enum [`spa_direction`](@ref))                   |
+| SPA\\_PARAM\\_ROUTE\\_device      | device id (Int)                                                             |
+| SPA\\_PARAM\\_ROUTE\\_name        | name of the routing destination (String)                                    |
+| SPA\\_PARAM\\_ROUTE\\_description | description of the destination (String)                                     |
+| SPA\\_PARAM\\_ROUTE\\_priority    | priority of the destination (Int)                                           |
+| SPA\\_PARAM\\_ROUTE\\_available   | availability of the destination (Id enum [`spa_param_availability`](@ref))  |
+| SPA\\_PARAM\\_ROUTE\\_info        | info (Struct(	Int : n\\_items,	(String : key,	String : value)*))               |
+| SPA\\_PARAM\\_ROUTE\\_profiles    | associated profile indexes (Array of Int)                                   |
+| SPA\\_PARAM\\_ROUTE\\_props       | properties SPA\\_TYPE\\_OBJECT\\_Props                                      |
+| SPA\\_PARAM\\_ROUTE\\_devices     | associated device indexes (Array of Int)                                    |
+| SPA\\_PARAM\\_ROUTE\\_profile     | profile id (Int)                                                            |
+| SPA\\_PARAM\\_ROUTE\\_save        | If route should be saved (Bool)                                             |
+"""
+const spa_param_route = UInt32
+const SPA_PARAM_ROUTE_START = 0 % UInt32
+const SPA_PARAM_ROUTE_index = 1 % UInt32
+const SPA_PARAM_ROUTE_direction = 2 % UInt32
+const SPA_PARAM_ROUTE_device = 3 % UInt32
+const SPA_PARAM_ROUTE_name = 4 % UInt32
+const SPA_PARAM_ROUTE_description = 5 % UInt32
+const SPA_PARAM_ROUTE_priority = 6 % UInt32
+const SPA_PARAM_ROUTE_available = 7 % UInt32
+const SPA_PARAM_ROUTE_info = 8 % UInt32
+const SPA_PARAM_ROUTE_profiles = 9 % UInt32
+const SPA_PARAM_ROUTE_props = 10 % UInt32
+const SPA_PARAM_ROUTE_devices = 11 % UInt32
+const SPA_PARAM_ROUTE_profile = 12 % UInt32
+const SPA_PARAM_ROUTE_save = 13 % UInt32
+
+"""
+    spa_param_tag
+
+properties for SPA\\_TYPE\\_OBJECT\\_ParamTag
+
+| Enumerator                    | Note                                                       |
+| :---------------------------- | :--------------------------------------------------------- |
+| SPA\\_PARAM\\_TAG\\_direction | direction, input/output (Id enum [`spa_direction`](@ref))  |
+| SPA\\_PARAM\\_TAG\\_info      | Struct( Int: n\\_items (String: key String: value)* )      |
+"""
+const spa_param_tag = UInt32
+const SPA_PARAM_TAG_START = 0 % UInt32
+const SPA_PARAM_TAG_direction = 1 % UInt32
+const SPA_PARAM_TAG_info = 2 % UInt32
+
+"""
+    spa_tag_info
+
+helper structure for managing tag objects
+"""
+struct spa_tag_info
+    direction::spa_direction
+    info::Ptr{spa_pod}
+end
+
+"""
     spa_media_type
 
 media type for SPA\\_TYPE\\_OBJECT\\_Format
@@ -8808,11 +9027,11 @@ struct spa_audio_info_mpegh
     rate::UInt32
 end
 
-struct __JL_Ctag_79
+struct __JL_Ctag_149
     data::NTuple{276, UInt8}
 end
 
-function Base.getproperty(x::Ptr{__JL_Ctag_79}, f::Symbol)
+function Base.getproperty(x::Ptr{__JL_Ctag_149}, f::Symbol)
     f === :raw && return Ptr{spa_audio_info_raw}(x + 0)
     f === :dsp && return Ptr{spa_audio_info_dsp}(x + 0)
     f === :iec958 && return Ptr{spa_audio_info_iec958}(x + 0)
@@ -8835,18 +9054,18 @@ function Base.getproperty(x::Ptr{__JL_Ctag_79}, f::Symbol)
     return getfield(x, f)
 end
 
-function Base.getproperty(x::__JL_Ctag_79, f::Symbol)
-    r = Ref{__JL_Ctag_79}(x)
-    ptr = Base.unsafe_convert(Ptr{__JL_Ctag_79}, r)
+function Base.getproperty(x::__JL_Ctag_149, f::Symbol)
+    r = Ref{__JL_Ctag_149}(x)
+    ptr = Base.unsafe_convert(Ptr{__JL_Ctag_149}, r)
     fptr = getproperty(ptr, f)
     GC.@preserve r unsafe_load(fptr)
 end
 
-function Base.setproperty!(x::Ptr{__JL_Ctag_79}, f::Symbol, v)
+function Base.setproperty!(x::Ptr{__JL_Ctag_149}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
-function Base.propertynames(x::__JL_Ctag_79, private::Bool = false)
+function Base.propertynames(x::__JL_Ctag_149, private::Bool = false)
     (:raw, :dsp, :iec958, :dsd, :mp3, :aac, :vorbis, :wma, :ra, :amr, :alac, :flac, :ape, :opus, :ac3, :eac3, :truehd, :dts, :mpegh, if private
             fieldnames(typeof(x))
         else
@@ -8868,7 +9087,7 @@ end
 function Base.getproperty(x::Ptr{spa_audio_info}, f::Symbol)
     f === :media_type && return Ptr{UInt32}(x + 0)
     f === :media_subtype && return Ptr{UInt32}(x + 4)
-    f === :info && return Ptr{__JL_Ctag_79}(x + 8)
+    f === :info && return Ptr{__JL_Ctag_149}(x + 8)
     return getfield(x, f)
 end
 
@@ -9450,11 +9669,11 @@ struct spa_video_info_mjpg
     max_framerate::spa_fraction
 end
 
-struct __JL_Ctag_80
+struct __JL_Ctag_150
     data::NTuple{88, UInt8}
 end
 
-function Base.getproperty(x::Ptr{__JL_Ctag_80}, f::Symbol)
+function Base.getproperty(x::Ptr{__JL_Ctag_150}, f::Symbol)
     f === :raw && return Ptr{spa_video_info_raw}(x + 0)
     f === :dsp && return Ptr{spa_video_info_dsp}(x + 0)
     f === :h264 && return Ptr{spa_video_info_h264}(x + 0)
@@ -9462,18 +9681,18 @@ function Base.getproperty(x::Ptr{__JL_Ctag_80}, f::Symbol)
     return getfield(x, f)
 end
 
-function Base.getproperty(x::__JL_Ctag_80, f::Symbol)
-    r = Ref{__JL_Ctag_80}(x)
-    ptr = Base.unsafe_convert(Ptr{__JL_Ctag_80}, r)
+function Base.getproperty(x::__JL_Ctag_150, f::Symbol)
+    r = Ref{__JL_Ctag_150}(x)
+    ptr = Base.unsafe_convert(Ptr{__JL_Ctag_150}, r)
     fptr = getproperty(ptr, f)
     GC.@preserve r unsafe_load(fptr)
 end
 
-function Base.setproperty!(x::Ptr{__JL_Ctag_80}, f::Symbol, v)
+function Base.setproperty!(x::Ptr{__JL_Ctag_150}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
-function Base.propertynames(x::__JL_Ctag_80, private::Bool = false)
+function Base.propertynames(x::__JL_Ctag_150, private::Bool = false)
     (:raw, :dsp, :h264, :mjpg, if private
             fieldnames(typeof(x))
         else
@@ -9495,7 +9714,7 @@ end
 function Base.getproperty(x::Ptr{spa_video_info}, f::Symbol)
     f === :media_type && return Ptr{UInt32}(x + 0)
     f === :media_subtype && return Ptr{UInt32}(x + 4)
-    f === :info && return Ptr{__JL_Ctag_80}(x + 8)
+    f === :info && return Ptr{__JL_Ctag_150}(x + 8)
     return getfield(x, f)
 end
 

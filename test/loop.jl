@@ -28,6 +28,12 @@ end
 struct SourceFailure end
 (::SourceFailure)(::EventSource, ::UInt64) = error("loop source callback failed")
 
+function invoke_idle_source(source::T) where {T<:IdleSource}
+    callback = PipeWire._idle_source_callback(source)
+    ccall(callback, Cvoid, (Ref{T},), source)
+    return nothing
+end
+
 @testset "managed thread loop" begin
     loop = ThreadLoop("PipeWire.jl managed-loop test")
     @test isopen(loop)
@@ -81,7 +87,10 @@ end
     loop = ThreadLoop("PipeWire.jl source test")
     event_count = Threads.Atomic{Int}(0)
     event = EventSource(loop, EventCounter(event_count))
-    idle = IdleSource(loop, (_source) -> nothing; enabled=false)
+    idle_count = Ref(0)
+    idle = IdleSource(loop, (_source) -> (idle_count[] += 1); enabled=false)
+    invoke_idle_source(idle)
+    @test idle_count[] == 1
     enable!(idle, false)
     timer_count = Threads.Atomic{Int}(0)
     timer = TimerSource(loop, TimerCounter(timer_count); delay=0.01)

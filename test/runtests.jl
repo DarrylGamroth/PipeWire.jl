@@ -3,6 +3,7 @@ using Test
 
 include("aqua.jl")
 include("current_info.jl")
+include("object_callbacks.jl")
 
 struct CountProcess
     count::Base.RefValue{Int}
@@ -88,6 +89,76 @@ function invoke_stream_extended_callbacks(
         command,
     )
     ccall(events.trigger_done, Cvoid, (Ref{T},), stream)
+    return nothing
+end
+
+function invoke_stream_remaining_callbacks(stream::T, param::Pod) where {T<:Stream}
+    events = getfield(stream, :events)[]
+    detail = "primary stream state"
+    buffer = Ptr{PipeWire.LibPipeWire.pw_buffer}(UInt(0x3456))
+    GC.@preserve stream detail param begin
+        ccall(
+            events.state_changed,
+            Cvoid,
+            (Ref{T}, Int32, Int32, Cstring),
+            stream,
+            Int32(8),
+            Int32(9),
+            pointer(detail),
+        )
+        ccall(
+            events.param_changed,
+            Cvoid,
+            (Ref{T}, UInt32, Ptr{PipeWire.LibPipeWire.spa_pod}),
+            stream,
+            UInt32(10),
+            PipeWire._pod_pointer(param),
+        )
+        ccall(
+            events.add_buffer,
+            Cvoid,
+            (Ref{T}, Ptr{PipeWire.LibPipeWire.pw_buffer}),
+            stream,
+            buffer,
+        )
+        ccall(
+            events.remove_buffer,
+            Cvoid,
+            (Ref{T}, Ptr{PipeWire.LibPipeWire.pw_buffer}),
+            stream,
+            buffer,
+        )
+        ccall(events.drained, Cvoid, (Ref{T},), stream)
+    end
+    return nothing
+end
+
+function invoke_proxy_extended_callbacks(proxy::T) where {T<:Proxy}
+    events = getfield(proxy, :events)[]
+    ccall(events.removed, Cvoid, (Ref{T},), proxy)
+    ccall(events.done, Cvoid, (Ref{T}, Cint), proxy, Cint(21))
+    ccall(
+        events.bound_props,
+        Cvoid,
+        (Ref{T}, UInt32, Ptr{PipeWire.LibPipeWire.spa_dict}),
+        proxy,
+        UInt32(22),
+        C_NULL,
+    )
+    return nothing
+end
+
+function invoke_proxy_error_callback(proxy::T) where {T<:Proxy}
+    detail = "primary proxy error"
+    GC.@preserve proxy detail ccall(
+        getfield(proxy, :events)[].error,
+        Cvoid,
+        (Ref{T}, Cint, Cint, Cstring),
+        proxy,
+        Cint(23),
+        Cint(-24),
+        pointer(detail),
+    )
     return nothing
 end
 
@@ -390,7 +461,20 @@ end
     factory = first(global_object for global_object in globals(registry) if
                     global_object.type == "PipeWire:Interface:Factory")
     bound = UInt32[]
-    proxy = bind(registry, factory; on_bound=(proxy, id) -> push!(bound, id))
+    removed = Ref(0)
+    done = Cint[]
+    errors = Tuple{Cint,PipeWireError}[]
+    bound_properties = Tuple{UInt32,Dict{String,String}}[]
+    proxy = bind(
+        registry,
+        factory;
+        on_bound=(proxy, id) -> push!(bound, id),
+        on_removed=proxy -> (removed[] += 1),
+        on_done=(proxy, sequence) -> push!(done, sequence),
+        on_error=(proxy, sequence, error) -> push!(errors, (sequence, error)),
+        on_bound_properties=(proxy, id, properties) ->
+            push!(bound_properties, (id, properties)),
+    )
 
     @test isopen(proxy)
     @test isconcretetype(typeof(proxy))
@@ -401,6 +485,14 @@ end
     roundtrip(proxy)
     @test bound_id(proxy) == factory.id
     @test bound == [factory.id]
+    invoke_proxy_extended_callbacks(proxy)
+    @test removed[] == 1
+    @test done == Cint[21]
+    @test bound_properties[end] == (UInt32(22), Dict{String,String}())
+    invoke_proxy_error_callback(proxy)
+    @test only(errors)[1] == 23
+    @test only(errors)[2].code == -24
+    @test only(errors)[2].detail == "primary proxy error"
 
     close(proxy)
     @test !isopen(proxy)
@@ -459,6 +551,7 @@ end
     set_property!(metadata, 0, "pipewire.jl.test")
     roundtrip(metadata)
     @test property_events[end] == (UInt32(0), "pipewire.jl.test", nothing, nothing)
+    @test clear!(metadata) === metadata
     @test_throws ArgumentError set_property!(metadata, 0, "bad\0key"; value="x")
     @test_throws ArgumentError bind(registry, metadata_global, Node)
     @test_throws ArgumentError destroy_object!(core, metadata)
@@ -536,12 +629,18 @@ end
     @test all(isconcretetype, fieldtypes(typeof(module_object)))
     @test all(isconcretetype, fieldtypes(typeof(client)))
     @test all(isconcretetype, fieldtypes(typeof(profiler)))
+    listener_factory_infos = FactoryInfo[]
+    factory_listener = add_listener!(
+        factory;
+        on_info=(factory, info) -> push!(listener_factory_infos, info),
+    )
     sample_profile = Pod(Int64(42))
     invoke_profile_callback(profiler, sample_profile)
     @test length(profiles) == 1
     @test pod_value(Int64, only(profiles)) == 42
     roundtrip(registry)
     @test only(factory_infos).id == factory_global.id
+    @test only(listener_factory_infos).id == factory_global.id
     @test !isempty(only(factory_infos).name)
     @test only(module_infos).id == module_global.id
     @test !isempty(only(module_infos).name)
@@ -550,6 +649,10 @@ end
     roundtrip(registry)
     @test !isempty(permission_events)
     @test first(permission_events)[1] == 0
+    @test update_properties!(client, Dict("application.name" => "PipeWire.jl client test")) ===
+          client
+    @test update_permissions!(client, Permission[]) === client
+    close(factory_listener)
     close(profiler)
     close(client)
     close(module_object)
@@ -604,7 +707,11 @@ include("examples.jl")
     state_changes = Tuple{Int32,Int32,Union{Nothing,String}}[]
     control_changes = Tuple{UInt32,Union{Nothing,StreamControl}}[]
     io_changes = StreamIO[]
+    param_changes = Tuple{UInt32,Union{Nothing,Pod}}[]
+    added_buffers = Ptr{PipeWire.LibPipeWire.pw_buffer}[]
+    removed_buffers = Ptr{PipeWire.LibPipeWire.pw_buffer}[]
     commands = Pod[]
+    drained_count = Ref(0)
     trigger_count = Ref(0)
     process_count = Ref(0)
     stream = Stream(
@@ -615,6 +722,10 @@ include("examples.jl")
             push!(state_changes, (old, current, detail)),
         on_control_info=(stream, id, control) -> push!(control_changes, (id, control)),
         on_io_changed=(stream, io) -> push!(io_changes, io),
+        on_param_changed=(stream, id, param) -> push!(param_changes, (id, param)),
+        on_buffer_added=(stream, buffer) -> push!(added_buffers, buffer),
+        on_buffer_removed=(stream, buffer) -> push!(removed_buffers, buffer),
+        on_drained=stream -> (drained_count[] += 1),
         on_command=(stream, command) -> push!(commands, command),
         on_trigger_done=(stream) -> (trigger_count[] += 1),
         on_process=CountProcess(process_count),
@@ -647,6 +758,7 @@ include("examples.jl")
     @test stream_properties(stream)["media.role"] == "Test"
     @test update_params!(stream, ()) === stream
     @test stream_control(stream, 0) === nothing
+    @test node_id(stream) isa UInt32
     @test stream_nsec(stream) isa UInt64
     @test !is_driving(stream)
     @test !is_lazy(stream)
@@ -685,10 +797,21 @@ include("examples.jl")
             StreamControl("Volume", UInt32(0), 0.5f0, 0.0f0, 1.0f0, control_values, 8),
         ),
     ]
+    copied_control = only(control_changes)[2]
+    @test isequal(copied_control, copied_control)
+    @test hash(copied_control) == hash(copied_control)
     @test io_changes == [StreamIO(UInt32(4), Ptr{Cvoid}(UInt(0x1234)), UInt32(64))]
     @test length(commands) == 1
     @test pod_value(Int32, commands[1]) == 7
     @test trigger_count[] == 1
+    stream_param = Pod(Int64(11))
+    invoke_stream_remaining_callbacks(stream, stream_param)
+    @test state_changes == [(Int32(8), Int32(9), "primary stream state")]
+    @test only(param_changes)[1] == 10
+    @test pod_value(Int64, something(only(param_changes)[2])) == 11
+    @test added_buffers == [Ptr{PipeWire.LibPipeWire.pw_buffer}(UInt(0x3456))]
+    @test removed_buffers == added_buffers
+    @test drained_count[] == 1
     @test_throws InvalidStateException close(core)
     @test_throws ArgumentError connect!(
         stream,
@@ -710,15 +833,21 @@ include("examples.jl")
     @test sizeof(format) == 168
     @test pod_type(format) == PipeWire.LibPipeWire.SPA_TYPE_Object
     @test_throws ArgumentError audio_format(channels=2, position=[Audio.MONO])
-    connect!(stream, :output; params=[format])
+    connect!(
+        stream,
+        :output;
+        flags=STREAM_AUTOCONNECT | STREAM_MAP_BUFFERS | STREAM_INACTIVE | STREAM_TRIGGER,
+        params=[format],
+    )
     @test stream_state(stream) == PipeWire.LibPipeWire.PW_STREAM_STATE_CONNECTING
-    @test state_changes == [
-        (
-            PipeWire.LibPipeWire.PW_STREAM_STATE_UNCONNECTED,
-            PipeWire.LibPipeWire.PW_STREAM_STATE_CONNECTING,
-            nothing,
-        ),
-    ]
+    @test state_changes[end] == (
+        PipeWire.LibPipeWire.PW_STREAM_STATE_UNCONNECTED,
+        PipeWire.LibPipeWire.PW_STREAM_STATE_CONNECTING,
+        nothing,
+    )
+    @test set_active!(stream) === stream
+    @test flush!(stream) === stream
+    @test trigger_process!(stream) === stream
     disconnect!(stream)
 
     storage = collect(UInt8(1):UInt8(16))
@@ -838,6 +967,11 @@ include("examples.jl")
         @test video_damage(borrowed) == [BufferRegion(1, 2, 3, 4)]
         @test video_transform(borrowed) == 2
         @test sync_timeline(borrowed) == BufferSyncTimeline(1, 20, 21)
+        bitmap = BufferBitmap(UInt32(1), UInt32(2), UInt32(3), Int32(4), UInt8[5])
+        same_bitmap = BufferBitmap(UInt32(1), UInt32(2), UInt32(3), Int32(4), UInt8[5])
+        @test bitmap == same_bitmap
+        @test isequal(bitmap, same_bitmap)
+        @test hash(bitmap) == hash(same_bitmap)
         @test buffer_metadata(borrowed, UInt32(500)) === nothing
         @test data_type(data) == PipeWire.LibPipeWire.SPA_DATA_MemPtr
         @test data_flags(data) == 0

@@ -66,3 +66,8 @@ jobs:
           files: lcov.info
           fail_ci_if_error: true
           use_oidc: true
+      - name: Enforce per-file coverage
+        run: >-
+          python3 .github/scripts/check_file_coverage.py lcov.info
+          --minimum 80
+          --ignore-prefix src/generated/

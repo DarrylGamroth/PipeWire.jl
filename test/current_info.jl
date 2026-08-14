@@ -227,6 +227,7 @@ end
 @testset "managed info tracker" begin
     context = Context()
     core = CoreConnection(context; self=true)
+    registry = Registry(core)
     raw_info = NodeInfo[]
     node = create_object(
         core,
@@ -240,6 +241,7 @@ end
         on_info=(node, info) -> push!(raw_info, info),
     )
     tracker = track_info!(node)
+    bound_node = nothing
     try
         @test isopen(tracker)
         @test isconcretetype(typeof(tracker))
@@ -261,13 +263,35 @@ end
         @test info.properties["node.name"] == "pipewire.jl.info-tracker"
         @test !isempty(raw_info)
 
+        roundtrip(registry)
+        node_global = only(
+            global_object for global_object in globals(registry) if
+            global_object.id == bound_id(node)
+        )
+        bound_node = bind(registry, node_global, Node)
+        roundtrip(bound_node)
+        @test proxy_id(bound_node) != typemax(UInt32)
+        @test subscribe_params!(bound_node, [PipeWire.SPA.PARAM_PROPS]) === bound_node
+        @test enum_params!(bound_node, PipeWire.SPA.PARAM_PROPS; count=1) === bound_node
+        @test set_param!(
+            bound_node,
+            PipeWire.SPA.PARAM_FORMAT,
+            Pod(audio_format_param()),
+        ) === bound_node
+        @test send_command!(
+            bound_node,
+            node_command(PipeWire.SPA.NODE_COMMAND_SUSPEND),
+        ) === bound_node
+
         close(tracker)
         @test !isopen(tracker)
         @test isopen(node)
         @test current_info(tracker) === info
     finally
+        bound_node === nothing || close(bound_node)
         close(tracker)
         destroy_object!(core, node)
+        close(registry)
         close(core)
         close(context)
     end

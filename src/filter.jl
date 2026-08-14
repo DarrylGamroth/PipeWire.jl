@@ -104,11 +104,14 @@ mutable struct Filter{CoreType<:CoreConnection,Callbacks}
     connected::Bool
 end
 
-function _filter_port(pointer::Ptr{Cvoid})
+function _filter_port(filter::Filter, pointer::Ptr{Cvoid})
     pointer == C_NULL && return nothing
-    object = unsafe_load(Ptr{Ptr{Cvoid}}(pointer))
-    object == C_NULL && return nothing
-    return unsafe_pointer_to_objref(object)::FilterPort
+    return lock(filter.state_lock) do
+        for port in filter.ports
+            port.handle == pointer && return port
+        end
+        return nothing
+    end
 end
 
 function _record_filter_callback_error(
@@ -220,7 +223,7 @@ function _filter_io_changed(
     _invoke_filter_callback(
         filter,
         Val(:on_io_changed),
-        _filter_port(port_data),
+        _filter_port(filter, port_data),
         FilterIO(id, area, size),
     )
     return nothing
@@ -236,7 +239,7 @@ function _filter_param_changed(
         _invoke_filter_callback(
             filter,
             Val(:on_param_changed),
-            _filter_port(port_data),
+            _filter_port(filter, port_data),
             id,
             _copy_pod(param),
         )
@@ -254,7 +257,12 @@ function _filter_buffer_added(
     port_data::Ptr{Cvoid},
     buffer::Ptr{LibPipeWire.pw_buffer},
 )::Cvoid
-    _invoke_filter_callback(filter, Val(:on_buffer_added), _filter_port(port_data), buffer)
+    _invoke_filter_callback(
+        filter,
+        Val(:on_buffer_added),
+        _filter_port(filter, port_data),
+        buffer,
+    )
     return nothing
 end
 
@@ -263,7 +271,12 @@ function _filter_buffer_removed(
     port_data::Ptr{Cvoid},
     buffer::Ptr{LibPipeWire.pw_buffer},
 )::Cvoid
-    _invoke_filter_callback(filter, Val(:on_buffer_removed), _filter_port(port_data), buffer)
+    _invoke_filter_callback(
+        filter,
+        Val(:on_buffer_removed),
+        _filter_port(filter, port_data),
+        buffer,
+    )
     return nothing
 end
 
@@ -589,10 +602,6 @@ function add_port!(
         port_data == C_NULL &&
             throw(PipeWireError(:pw_filter_add_port, -Base.Libc.errno()))
         port = FilterPort(port_data, filter, native_direction, data)
-        GC.@preserve port unsafe_store!(
-            Ptr{Ptr{Cvoid}}(port_data),
-            pointer_from_objref(port),
-        )
         push!(filter.ports, port)
         return port
     end

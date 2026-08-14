@@ -165,10 +165,6 @@ mutable struct CoreConnection{Callbacks}
     callbacks::Callbacks
 end
 
-function _callback_state(data::Ptr{Cvoid}, ::Type{T}) where {T}
-    return unsafe_pointer_to_objref(data)::T
-end
-
 function _stop_after_callback(state, error=nothing)
     lock(state.lock) do
         error !== nothing && state.error[] === nothing && (state.error[] = error)
@@ -372,9 +368,6 @@ function _core_bound_properties(
     end
     return nothing
 end
-
-const _REGISTRY_GLOBAL_ADDED = Ref{Ptr{Cvoid}}(C_NULL)
-const _REGISTRY_GLOBAL_REMOVED = Ref{Ptr{Cvoid}}(C_NULL)
 
 function _core_events(::T) where {T<:CoreConnection}
     info = @cfunction(
@@ -866,6 +859,23 @@ mutable struct RegistryState
     active::Bool
 end
 
+"""
+    Registry(core::CoreConnection)
+
+Create an owning proxy for the core registry and subscribe to global-object
+addition and removal events. Call [`roundtrip`](@ref) to receive the initial
+set of globals.
+"""
+mutable struct Registry{CoreType<:CoreConnection}
+    handle::Ptr{LibPipeWire.pw_registry}
+    core::CoreType
+    state_lock::ReentrantLock
+    proxy_count::Int
+    listener::Base.RefValue{LibPipeWire.spa_hook}
+    events::Base.RefValue{LibPipeWire.pw_registry_events}
+    callback_state::RegistryState
+end
+
 function _copy_properties(pointer::Ptr{LibPipeWire.spa_dict})
     result = Dict{String,String}()
     pointer == C_NULL && return result
@@ -879,14 +889,14 @@ function _copy_properties(pointer::Ptr{LibPipeWire.spa_dict})
 end
 
 function _registry_global_added(
-    data::Ptr{Cvoid},
+    registry::Registry,
     id::UInt32,
     permissions::UInt32,
     type::Cstring,
     version::UInt32,
     properties::Ptr{LibPipeWire.spa_dict},
 )::Cvoid
-    state = _callback_state(data, RegistryState)
+    state = registry.callback_state
     try
         global_object = Global(
             id,
@@ -907,8 +917,8 @@ function _registry_global_added(
     return nothing
 end
 
-function _registry_global_removed(data::Ptr{Cvoid}, id::UInt32)::Cvoid
-    state = _callback_state(data, RegistryState)
+function _registry_global_removed(registry::Registry, id::UInt32)::Cvoid
+    state = registry.callback_state
     try
         lock(state.lock) do
             state.active && delete!(state.globals, id)
@@ -922,35 +932,22 @@ function _registry_global_removed(data::Ptr{Cvoid}, id::UInt32)::Cvoid
     return nothing
 end
 
-function _initialize_registry_callbacks!()
-    _REGISTRY_GLOBAL_ADDED[] = @cfunction(
+function _registry_events(::T) where {T<:Registry}
+    global_added = @cfunction(
         _registry_global_added,
         Cvoid,
-        (Ptr{Cvoid}, UInt32, UInt32, Cstring, UInt32, Ptr{LibPipeWire.spa_dict}),
+        (Ref{T}, UInt32, UInt32, Cstring, UInt32, Ptr{LibPipeWire.spa_dict}),
     )
-    _REGISTRY_GLOBAL_REMOVED[] = @cfunction(
+    global_removed = @cfunction(
         _registry_global_removed,
         Cvoid,
-        (Ptr{Cvoid}, UInt32),
+        (Ref{T}, UInt32),
     )
-    return nothing
-end
-
-"""
-    Registry(core::CoreConnection)
-
-Create an owning proxy for the core registry and subscribe to global-object
-addition and removal events. Call [`roundtrip`](@ref) to receive the initial
-set of globals.
-"""
-mutable struct Registry{CoreType<:CoreConnection}
-    handle::Ptr{LibPipeWire.pw_registry}
-    core::CoreType
-    state_lock::ReentrantLock
-    proxy_count::Int
-    listener::Base.RefValue{LibPipeWire.spa_hook}
-    events::Base.RefValue{LibPipeWire.pw_registry_events}
-    callback_state::RegistryState
+    return LibPipeWire.pw_registry_events(
+        UInt32(0),
+        global_added,
+        global_removed,
+    )
 end
 
 function Registry(core::CoreConnection)
@@ -970,28 +967,35 @@ function Registry(core::CoreConnection)
         true,
     )
     listener = Ref(_zero_hook())
-    events = Ref(
-        LibPipeWire.pw_registry_events(
-            UInt32(0),
-            _REGISTRY_GLOBAL_ADDED[],
-            _REGISTRY_GLOBAL_REMOVED[],
-        ),
+    events = Ref{LibPipeWire.pw_registry_events}()
+    registry = Registry(
+        handle,
+        core,
+        ReentrantLock(),
+        0,
+        listener,
+        events,
+        state,
     )
-    result = GC.@preserve state listener events begin
+    try
+        events[] = _registry_events(registry)
+    catch
+        close(registry)
+        rethrow()
+    end
+    result = GC.@preserve registry listener events begin
         LibPipeWire.pw_registry_add_listener(
             handle,
             Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
             Base.unsafe_convert(Ptr{LibPipeWire.pw_registry_events}, events),
-            pointer_from_objref(state),
+            pointer_from_objref(registry),
         )
     end
     if result < 0
-        LibPipeWire.pw_proxy_destroy(Ptr{LibPipeWire.pw_proxy}(handle))
-        _release_registry(core)
+        close(registry)
         throw(PipeWireError(:pw_registry_add_listener, result))
     end
 
-    registry = Registry(handle, core, ReentrantLock(), 0, listener, events, state)
     finalizer(close, registry)
     return registry
 end

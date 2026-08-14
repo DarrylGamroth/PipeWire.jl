@@ -137,9 +137,4 @@ Return the version of the loaded PipeWire client library.
 """
 library_version() = VersionNumber(unsafe_string(LibPipeWire.pw_get_library_version()))
 
-function __init__()
-    _initialize_registry_callbacks!()
-    return nothing
-end
-
 end # module PipeWire

@@ -118,8 +118,8 @@ end
     @test output.direction == PipeWire.DIRECTION_OUTPUT
     @test isconcretetype(typeof(input))
     @test all(isconcretetype, fieldtypes(typeof(input)))
-    @test PipeWire._filter_port(input.handle) === input
-    @test PipeWire._filter_port(C_NULL) === nothing
+    @test PipeWire._filter_port(filter, input.handle) === input
+    @test PipeWire._filter_port(filter, C_NULL) === nothing
     @test_throws ArgumentError add_port!(filter, :sideways)
     @test_throws ArgumentError add_port!(filter, :input; flags=-1)
 

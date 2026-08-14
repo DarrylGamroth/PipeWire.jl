@@ -2,6 +2,7 @@ ignore:
   - "src/generated/**"
 
 coverage:
+  range: 60..80
   status:
     project:
       default:

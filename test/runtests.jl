@@ -172,6 +172,11 @@ function dequeue_allocations(buffer, stream)
     return @allocated dequeue_buffer!(buffer, stream)
 end
 
+function chunk_info_allocations(data)
+    chunk_info(data)
+    return @allocated chunk_info(data)
+end
+
 function invoke_core_scalar_callbacks(core::T) where {T<:CoreConnection}
     events = core.events[]
     GC.@preserve core begin
@@ -996,8 +1001,7 @@ include("examples.jl")
         snapshot = @inferred chunk_info(data)
         @test snapshot == BufferChunk(2, 4, 2, SPA.CHUNK_FLAG_CORRUPTED)
         @test !iszero(snapshot.flags & SPA.CHUNK_FLAG_CORRUPTED)
-        chunk_info(data)
-        @test @allocated(chunk_info(data)) == 0
+        @test chunk_info_allocations(data) == 0
         set_chunk!(data; offset=0, size=8, stride=4)
         @test chunk_info(data) == BufferChunk(0, 8, 4, SPA.CHUNK_FLAG_CORRUPTED)
         @test snapshot == BufferChunk(2, 4, 2, SPA.CHUNK_FLAG_CORRUPTED)

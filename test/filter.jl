@@ -298,8 +298,7 @@ end
         snapshot = @inferred chunk_info(data)
         @test snapshot == BufferChunk(2, 4, 2, SPA.CHUNK_FLAG_CORRUPTED)
         @test !iszero(snapshot.flags & SPA.CHUNK_FLAG_CORRUPTED)
-        chunk_info(data)
-        @test @allocated(chunk_info(data)) == 0
+        @test chunk_info_allocations(data) == 0
         @test writable_bytes(data) == storage
         @test set_chunk!(data; offset=1, size=8, stride=4) === data
         @test chunk_info(data) == BufferChunk(1, 8, 4, SPA.CHUNK_FLAG_CORRUPTED)

@@ -14,14 +14,23 @@ concurrency:
 
 jobs:
   test:
-    name: Julia 1.10
-    runs-on: ubuntu-latest
+    name: Julia 1.10 (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
 
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
         with:
           version: '1.10'
+          arch: ${{ matrix.arch }}
       - uses: julia-actions/cache@v3
       - name: Instantiate from DarrylGamrothRegistry
         run: >-

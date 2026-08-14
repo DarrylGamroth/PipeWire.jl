@@ -1,6 +1,7 @@
 module PipeWire
 
 export CoreConnection,
+    AudioInfoRaw,
     CoreInfo,
     CoreMemory,
     Context,
@@ -86,6 +87,7 @@ export CoreConnection,
     Audio,
     SPA,
     Video,
+    VideoInfoRaw,
     add_port!,
     add_listener!,
     allocate_buffer!,

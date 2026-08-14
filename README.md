@@ -176,6 +176,25 @@ format = video_format(
 )
 ```
 
+Negotiated format PODs can be converted into concrete owned snapshots. This is
+the usual operation inside `on_param_changed` after PipeWire fixates a stream
+format:
+
+```julia
+stream = Stream(core, "capture"; on_param_changed=(stream, id, param) -> begin
+    param === nothing && return
+    id == PipeWire.LibPipeWire.SPA_PARAM_Format || return
+    info = AudioInfoRaw(param)
+    println(info.rate, " Hz, ", info.channels, " channels")
+end)
+```
+
+`AudioInfoRaw` and `VideoInfoRaw` correspond to PipeWire's
+`spa_audio_info_raw` and `spa_video_info_raw`. Their numeric enum fields retain
+the native values, so values introduced by newer PipeWire versions remain
+representable. Common values can be compared with `UInt32(Audio.F32)`,
+`UInt32(Audio.FL)`, and `UInt32(Video.NV12)`.
+
 `with_registry` connects to the default PipeWire daemon. For an embedded
 in-process core, use `with_registry(self=true)`. It also accepts an existing
 loop, context/core properties, or a connected socket fd. PipeWire takes

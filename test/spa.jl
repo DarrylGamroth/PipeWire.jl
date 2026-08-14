@@ -281,6 +281,12 @@ end
     @test pod_value(String, decoded.properties[2].value) == "audio"
     @test pod_value(decoded.properties[3].value) ==
           SPA.Choice(SPA.CHOICE_RANGE, Int32[48_000, 8_000, 192_000])
+    @test decoded[1] == decoded.properties[1]
+    @test get(decoded, 2, nothing) == decoded.properties[2]
+    @test get(decoded, 99, :missing) === :missing
+    @test haskey(decoded, 3)
+    @test !haskey(decoded, 99)
+    @test_throws KeyError decoded[99]
 
     properties = [SPA.Property(1, Int32(2))]
     copied = SPA.Object(1, 2, properties)
@@ -474,6 +480,111 @@ end
     @test_throws ArgumentError video_format(views=big(typemax(Int32)) + 1)
     @test_throws ArgumentError video_format(interlace_mode=-1)
     @test_throws ArgumentError video_format(id=-1)
+end
+
+@testset "raw format information" begin
+    audio = @inferred AudioInfoRaw(
+        audio_format(format=Audio.F32, rate=44_100, channels=2),
+    )
+    @test all(isconcretetype, fieldtypes(AudioInfoRaw))
+    @test audio.format == UInt32(Audio.F32)
+    @test audio.flags == 0
+    @test audio.rate == 44_100
+    @test audio.channels == 2
+    @test audio.position == UInt32[UInt32(Audio.FL), UInt32(Audio.FR)]
+    @test AudioInfoRaw(audio_format_param(channels=1)).position ==
+          UInt32[UInt32(Audio.MONO)]
+
+    unpositioned = Pod(
+        SPA.Object(
+            PipeWire.LibPipeWire.SPA_TYPE_OBJECT_Format,
+            PipeWire.LibPipeWire.SPA_PARAM_Format,
+            SPA.Property(
+                PipeWire.LibPipeWire.SPA_FORMAT_mediaType,
+                SPA.Id(PipeWire.LibPipeWire.SPA_MEDIA_TYPE_audio),
+            ),
+            SPA.Property(
+                PipeWire.LibPipeWire.SPA_FORMAT_mediaSubtype,
+                SPA.Id(PipeWire.LibPipeWire.SPA_MEDIA_SUBTYPE_raw),
+            ),
+            SPA.Property(
+                PipeWire.LibPipeWire.SPA_FORMAT_AUDIO_format,
+                SPA.Id(UInt32(Audio.F32)),
+            ),
+            SPA.Property(PipeWire.LibPipeWire.SPA_FORMAT_AUDIO_rate, Int32(48_000)),
+            SPA.Property(PipeWire.LibPipeWire.SPA_FORMAT_AUDIO_channels, Int32(2)),
+            SPA.Property(
+                PipeWire.LibPipeWire.SPA_FORMAT_AUDIO_position,
+                SPA.Array(SPA.Id[SPA.Id(UInt32(Audio.MONO))]),
+            ),
+        ),
+    )
+    unpositioned_info = AudioInfoRaw(unpositioned)
+    @test unpositioned_info.flags == Audio.FLAG_UNPOSITIONED
+    @test unpositioned_info.position == zeros(UInt32, 2)
+
+    video = @inferred VideoInfoRaw(
+        video_format(
+            format=Video.NV12,
+            size=SPA.Rectangle(1_920, 1_080),
+            framerate=SPA.Fraction(30_000, 1_001),
+            modifier=0x1234,
+            max_framerate=SPA.Fraction(60, 1),
+            views=2,
+            interlace_mode=1,
+            pixel_aspect_ratio=SPA.Fraction(1, 1),
+            multiview_mode=2,
+            multiview_flags=3,
+            chroma_site=4,
+            color_range=1,
+            color_matrix=2,
+            transfer_function=3,
+            color_primaries=4,
+        ),
+    )
+    @test all(isconcretetype, fieldtypes(VideoInfoRaw))
+    @test isbitstype(VideoInfoRaw)
+    @test video.format == UInt32(Video.NV12)
+    @test video.flags == Video.FLAG_MODIFIER
+    @test video.modifier == 0x1234
+    @test video.size == SPA.Rectangle(1_920, 1_080)
+    @test video.framerate == SPA.Fraction(30_000, 1_001)
+    @test video.max_framerate == SPA.Fraction(60, 1)
+    @test video.views == 2
+    @test video.interlace_mode == 1
+    @test video.pixel_aspect_ratio == SPA.Fraction(1, 1)
+    @test video.multiview_mode == 2
+    @test video.multiview_flags == 3
+    @test video.chroma_site == 4
+    @test video.color_range == 1
+    @test video.color_matrix == 2
+    @test video.transfer_function == 3
+    @test video.color_primaries == 4
+    @test VideoInfoRaw(video_format_param()).format == UInt32(Video.RGBA)
+
+    @test_throws ArgumentError AudioInfoRaw(video_format())
+    @test_throws ArgumentError VideoInfoRaw(audio_format())
+    @test_throws ArgumentError AudioInfoRaw(Pod(Int32(1)))
+
+    unfixed_audio = Pod(
+        SPA.Object(
+            PipeWire.LibPipeWire.SPA_TYPE_OBJECT_Format,
+            PipeWire.LibPipeWire.SPA_PARAM_EnumFormat,
+            SPA.Property(
+                PipeWire.LibPipeWire.SPA_FORMAT_mediaType,
+                SPA.Id(PipeWire.LibPipeWire.SPA_MEDIA_TYPE_audio),
+            ),
+            SPA.Property(
+                PipeWire.LibPipeWire.SPA_FORMAT_mediaSubtype,
+                SPA.Id(PipeWire.LibPipeWire.SPA_MEDIA_SUBTYPE_raw),
+            ),
+            SPA.Property(
+                PipeWire.LibPipeWire.SPA_FORMAT_AUDIO_rate,
+                SPA.Choice(SPA.CHOICE_ENUM, Int32[48_000, 44_100]),
+            ),
+        ),
+    )
+    @test_throws ArgumentError AudioInfoRaw(unfixed_audio)
 end
 
 @testset "bitmap and pointer SPA POD values" begin

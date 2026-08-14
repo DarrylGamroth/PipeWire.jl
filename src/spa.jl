@@ -236,8 +236,7 @@ _load_pod_fixed(::Type{SPA.Fraction}, pointer::Ptr{UInt8}) = SPA.Fraction(
 
 Return the owned value stored in an SPA POD. Supplying `T` gives a type-stable
 result and validates that the POD has the corresponding wire type. The
-one-argument form selects `T` from [`pod_type`](@ref). Object, choice, and
-sequence PODs are not yet decoded by this method.
+one-argument form selects `T` from [`pod_type`](@ref).
 """
 function pod_value(::Type{Nothing}, pod::Pod)
     _check_pod_body(pod, UInt32(LibPipeWire.SPA_TYPE_None), 0)
@@ -1071,3 +1070,217 @@ audio_format_param(; kwargs...) = pod_value(SPA.Parameter, audio_format(; kwargs
 
 "Build a typed SPA raw-video format parameter."
 video_format_param(; kwargs...) = pod_value(SPA.Parameter, video_format(; kwargs...))
+
+
+"""
+    AudioInfoRaw(format::Pod)
+    AudioInfoRaw(format::SPA.Parameter)
+
+Parse a fixed raw-audio format into an owned snapshot corresponding to
+PipeWire's `spa_audio_info_raw`. `format` and `position` retain their native
+numeric values so formats and channel positions added by newer PipeWire
+versions remain representable. Compare them with `UInt32(Audio.F32)` and
+`UInt32(Audio.FL)`, for example.
+
+When the position property is absent or does not contain exactly `channels`
+entries, [`Audio.FLAG_UNPOSITIONED`](@ref) is set and `position` contains one
+zero value per channel.
+"""
+struct AudioInfoRaw
+    format::UInt32
+    flags::UInt32
+    rate::UInt32
+    channels::UInt32
+    position::Vector{UInt32}
+end
+
+Base.:(==)(left::AudioInfoRaw, right::AudioInfoRaw) =
+    left.format == right.format &&
+    left.flags == right.flags &&
+    left.rate == right.rate &&
+    left.channels == right.channels &&
+    left.position == right.position
+Base.isequal(left::AudioInfoRaw, right::AudioInfoRaw) =
+    isequal(left.format, right.format) &&
+    isequal(left.flags, right.flags) &&
+    isequal(left.rate, right.rate) &&
+    isequal(left.channels, right.channels) &&
+    isequal(left.position, right.position)
+Base.hash(value::AudioInfoRaw, seed::UInt) = hash(
+    (value.format, value.flags, value.rate, value.channels, value.position),
+    seed,
+)
+
+
+"""
+    VideoInfoRaw(format::Pod)
+    VideoInfoRaw(format::SPA.Parameter)
+
+Parse a fixed raw-video format into an owned snapshot corresponding to
+PipeWire's `spa_video_info_raw`. Numeric enum fields retain their native values
+so values introduced by newer PipeWire versions remain representable.
+"""
+struct VideoInfoRaw
+    format::UInt32
+    flags::UInt32
+    modifier::UInt64
+    size::SPA.Rectangle
+    framerate::SPA.Fraction
+    max_framerate::SPA.Fraction
+    views::UInt32
+    interlace_mode::UInt32
+    pixel_aspect_ratio::SPA.Fraction
+    multiview_mode::UInt32
+    multiview_flags::UInt32
+    chroma_site::UInt32
+    color_range::UInt32
+    color_matrix::UInt32
+    transfer_function::UInt32
+    color_primaries::UInt32
+end
+
+Base.:(==)(left::VideoInfoRaw, right::VideoInfoRaw) = left === right
+Base.isequal(left::VideoInfoRaw, right::VideoInfoRaw) = left === right
+Base.hash(value::VideoInfoRaw, seed::UInt) = hash(
+    ntuple(index -> getfield(value, index), fieldcount(VideoInfoRaw)),
+    seed,
+)
+
+
+function _format_property(object::SPA.Object, key::Integer)
+    return get(object, key, nothing)
+end
+
+
+function _format_value(::Type{T}, object::SPA.Object, key::Integer, default::T) where {T}
+    property = _format_property(object, key)
+    property === nothing && return default
+    return pod_value(T, property.value)
+end
+
+
+function _format_id(object::SPA.Object, key::Integer, default::UInt32=UInt32(0))
+    value = _format_value(SPA.Id, object, key, SPA.Id(default))
+    return value.value
+end
+
+
+function _raw_format_object(format::Pod, media_type::UInt32)
+    object = pod_value(SPA.Object, format)
+    object.type == LibPipeWire.SPA_TYPE_OBJECT_Format || throw(
+        ArgumentError("the SPA object is not a format"),
+    )
+    actual_media_type = _format_id(object, LibPipeWire.SPA_FORMAT_mediaType)
+    actual_media_type == media_type || throw(
+        ArgumentError("the SPA format has the wrong media type"),
+    )
+    media_subtype = _format_id(object, LibPipeWire.SPA_FORMAT_mediaSubtype)
+    media_subtype == LibPipeWire.SPA_MEDIA_SUBTYPE_raw || throw(
+        ArgumentError("the SPA format media subtype is not raw"),
+    )
+    return object
+end
+
+
+function AudioInfoRaw(format::Pod)
+    object = _raw_format_object(format, UInt32(LibPipeWire.SPA_MEDIA_TYPE_audio))
+    native_format = _format_id(object, LibPipeWire.SPA_FORMAT_AUDIO_format)
+    rate_value = _format_value(
+        Int32,
+        object,
+        LibPipeWire.SPA_FORMAT_AUDIO_rate,
+        Int32(0),
+    )
+    channel_value = _format_value(
+        Int32,
+        object,
+        LibPipeWire.SPA_FORMAT_AUDIO_channels,
+        Int32(0),
+    )
+    rate_value >= 0 || throw(ArgumentError("the raw-audio sample rate is negative"))
+    channel_value >= 0 || throw(ArgumentError("the raw-audio channel count is negative"))
+    channels = UInt32(channel_value)
+
+    property = _format_property(object, LibPipeWire.SPA_FORMAT_AUDIO_position)
+    positioned = property !== nothing
+    positions = if positioned
+        values = pod_value(SPA.Array{SPA.Id}, property.value).values
+        positioned = length(values) == channels
+        positioned ? UInt32[value.value for value in values] : zeros(UInt32, channels)
+    else
+        zeros(UInt32, channels)
+    end
+    flags = positioned ? UInt32(0) : Audio.FLAG_UNPOSITIONED
+    return AudioInfoRaw(native_format, flags, UInt32(rate_value), channels, positions)
+end
+
+
+AudioInfoRaw(format::SPA.Parameter) = AudioInfoRaw(Pod(format))
+
+
+function VideoInfoRaw(format::Pod)
+    object = _raw_format_object(format, UInt32(LibPipeWire.SPA_MEDIA_TYPE_video))
+    modifier_property = _format_property(object, LibPipeWire.SPA_FORMAT_VIDEO_modifier)
+    modifier = if modifier_property === nothing
+        UInt64(0)
+    else
+        reinterpret(UInt64, pod_value(Int64, modifier_property.value))
+    end
+    flags = if modifier_property === nothing
+        UInt32(0)
+    else
+        result = Video.FLAG_MODIFIER
+        modifier_property.flags & SPA.PROPERTY_DONT_FIXATE == 0 ||
+            (result |= Video.FLAG_MODIFIER_FIXATION_REQUIRED)
+        result
+    end
+
+    views_value = _format_value(
+        Int32,
+        object,
+        LibPipeWire.SPA_FORMAT_VIDEO_views,
+        Int32(0),
+    )
+    views_value >= 0 || throw(ArgumentError("the raw-video view count is negative"))
+    return VideoInfoRaw(
+        _format_id(object, LibPipeWire.SPA_FORMAT_VIDEO_format),
+        flags,
+        modifier,
+        _format_value(
+            SPA.Rectangle,
+            object,
+            LibPipeWire.SPA_FORMAT_VIDEO_size,
+            SPA.Rectangle(0, 0),
+        ),
+        _format_value(
+            SPA.Fraction,
+            object,
+            LibPipeWire.SPA_FORMAT_VIDEO_framerate,
+            SPA.Fraction(0, 0),
+        ),
+        _format_value(
+            SPA.Fraction,
+            object,
+            LibPipeWire.SPA_FORMAT_VIDEO_maxFramerate,
+            SPA.Fraction(0, 0),
+        ),
+        UInt32(views_value),
+        _format_id(object, LibPipeWire.SPA_FORMAT_VIDEO_interlaceMode),
+        _format_value(
+            SPA.Fraction,
+            object,
+            LibPipeWire.SPA_FORMAT_VIDEO_pixelAspectRatio,
+            SPA.Fraction(0, 0),
+        ),
+        _format_id(object, LibPipeWire.SPA_FORMAT_VIDEO_multiviewMode),
+        _format_id(object, LibPipeWire.SPA_FORMAT_VIDEO_multiviewFlags),
+        _format_id(object, LibPipeWire.SPA_FORMAT_VIDEO_chromaSite),
+        _format_id(object, LibPipeWire.SPA_FORMAT_VIDEO_colorRange),
+        _format_id(object, LibPipeWire.SPA_FORMAT_VIDEO_colorMatrix),
+        _format_id(object, LibPipeWire.SPA_FORMAT_VIDEO_transferFunction),
+        _format_id(object, LibPipeWire.SPA_FORMAT_VIDEO_colorPrimaries),
+    )
+end
+
+
+VideoInfoRaw(format::SPA.Parameter) = VideoInfoRaw(Pod(format))

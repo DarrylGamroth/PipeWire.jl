@@ -279,7 +279,12 @@ Base.isequal(left::Property, right::Property) =
     isequal(left.value, right.value)
 Base.hash(value::Property, seed::UInt) = hash((value.key, value.flags, value.value), seed)
 
-"An owned SPA POD object."
+"""
+An owned SPA POD object.
+
+Use `object[key]`, `get(object, key, default)`, and `haskey(object, key)` to
+access properties by their native `UInt32` key.
+"""
 struct Object
     type::UInt32
     id::UInt32
@@ -311,6 +316,23 @@ Base.isequal(left::Object, right::Object) =
     isequal(left.id, right.id) &&
     isequal(left.properties, right.properties)
 Base.hash(value::Object, seed::UInt) = hash((value.type, value.id, value.properties), seed)
+
+function Base.get(object::Object, key::Integer, default)
+    0 <= key <= typemax(UInt32) || return default
+    native_key = UInt32(key)
+    for property in object.properties
+        property.key == native_key && return property
+    end
+    return default
+end
+
+function Base.getindex(object::Object, key::Integer)
+    property = get(object, key, nothing)
+    property === nothing && throw(KeyError(key))
+    return property
+end
+
+Base.haskey(object::Object, key::Integer) = get(object, key, nothing) !== nothing
 
 _owned_object(type::UInt32, id::UInt32, properties::Vector{Property}) =
     Object(type, id, properties, nothing)
@@ -432,6 +454,9 @@ module Audio
 
 using ..LibPipeWire
 
+"Set when raw-audio channel positions are unspecified."
+const FLAG_UNPOSITIONED = UInt32(1 << 0)
+
 @enum Format::UInt32 begin
     UNKNOWN = LibPipeWire.SPA_AUDIO_FORMAT_UNKNOWN
     S8 = LibPipeWire.SPA_AUDIO_FORMAT_S8
@@ -471,6 +496,13 @@ Raw video pixel formats used by [`video_format`](@ref).
 module Video
 
 using ..LibPipeWire
+
+const FLAG_VARIABLE_FPS = UInt32(LibPipeWire.SPA_VIDEO_FLAG_VARIABLE_FPS)
+const FLAG_PREMULTIPLIED_ALPHA =
+    UInt32(LibPipeWire.SPA_VIDEO_FLAG_PREMULTIPLIED_ALPHA)
+const FLAG_MODIFIER = UInt32(LibPipeWire.SPA_VIDEO_FLAG_MODIFIER)
+const FLAG_MODIFIER_FIXATION_REQUIRED =
+    UInt32(LibPipeWire.SPA_VIDEO_FLAG_MODIFIER_FIXATION_REQUIRED)
 
 @enum Format::UInt32 begin
     UNKNOWN = LibPipeWire.SPA_VIDEO_FORMAT_UNKNOWN

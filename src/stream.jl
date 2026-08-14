@@ -130,6 +130,7 @@ mutable struct Stream{CoreType<:CoreConnection,Callbacks}
     events::Base.RefValue{LibPipeWire.pw_stream_events}
     callbacks::Callbacks
     callback_error::Base.RefValue{Any}
+    buffer_owners::Dict{Ptr{LibPipeWire.pw_buffer},Any}
     callbacks_active::Bool
     connected::Bool
 end
@@ -224,7 +225,13 @@ function _stream_buffer_removed(
     stream::Stream,
     buffer::Ptr{LibPipeWire.pw_buffer},
 )::Cvoid
-    _invoke_stream_callback(stream, Val(:on_buffer_removed), buffer)
+    try
+        _invoke_stream_callback(stream, Val(:on_buffer_removed), buffer)
+    finally
+        lock(stream.state_lock) do
+            pop!(stream.buffer_owners, buffer, nothing)
+        end
+    end
     return nothing
 end
 
@@ -369,6 +376,7 @@ function Stream(
         events,
         callbacks,
         Ref{Any}(nothing),
+        Dict{Ptr{LibPipeWire.pw_buffer},Any}(),
         true,
         false,
     )
@@ -425,6 +433,7 @@ function Base.close(stream::Stream)
         stream.callbacks_active = false
     end
     LibPipeWire.pw_stream_destroy(handle)
+    empty!(stream.buffer_owners)
     _release_stream(stream.core)
     return nothing
 end
@@ -781,10 +790,372 @@ end
 
 StreamBuffer() = StreamBuffer(Ptr{LibPipeWire.pw_buffer}(C_NULL))
 
+"A concrete snapshot of the fields attached to a PipeWire stream buffer."
+struct StreamBufferInfo
+    user_data::Ptr{Cvoid}
+    size::UInt64
+    requested::UInt64
+    time::UInt64
+end
+
+"A borrowed metadata entry belonging to a [`StreamBuffer`](@ref)."
+struct StreamMetadata
+    buffer::StreamBuffer
+    index::Int
+end
+
+"An owned snapshot of SPA header metadata."
+struct BufferHeader
+    flags::UInt32
+    offset::UInt32
+    pts::Int64
+    dts_offset::Int64
+    sequence::UInt64
+end
+
+"An owned rectangular metadata region."
+struct BufferRegion
+    x::Int32
+    y::Int32
+    width::UInt32
+    height::UInt32
+end
+
+"An owned inline-bitmap metadata snapshot."
+struct BufferBitmap
+    format::UInt32
+    width::UInt32
+    height::UInt32
+    stride::Int32
+    data::Vector{UInt8}
+end
+
+Base.:(==)(left::BufferBitmap, right::BufferBitmap) =
+    left.format == right.format &&
+    left.width == right.width &&
+    left.height == right.height &&
+    left.stride == right.stride &&
+    left.data == right.data
+Base.isequal(left::BufferBitmap, right::BufferBitmap) =
+    isequal(left.format, right.format) &&
+    isequal(left.width, right.width) &&
+    isequal(left.height, right.height) &&
+    isequal(left.stride, right.stride) &&
+    isequal(left.data, right.data)
+Base.hash(value::BufferBitmap, seed::UInt) =
+    hash((value.format, value.width, value.height, value.stride, value.data), seed)
+
+"An owned cursor metadata snapshot with an optional inline bitmap."
+struct BufferCursor{Bitmap}
+    id::UInt32
+    flags::UInt32
+    x::Int32
+    y::Int32
+    hotspot_x::Int32
+    hotspot_y::Int32
+    bitmap::Bitmap
+end
+
+function BufferCursor(
+    id::Integer,
+    flags::Integer,
+    x::Integer,
+    y::Integer,
+    hotspot_x::Integer,
+    hotspot_y::Integer,
+    bitmap,
+)
+    object_id = _core_uint32(id, "cursor ID")
+    native_flags = _core_uint32(flags, "cursor flags")
+    values = (x, y, hotspot_x, hotspot_y)
+    all(value -> typemin(Int32) <= value <= typemax(Int32), values) ||
+        throw(ArgumentError("a cursor coordinate is outside Int32 range"))
+    return BufferCursor(
+        object_id,
+        native_flags,
+        Int32(x),
+        Int32(y),
+        Int32(hotspot_x),
+        Int32(hotspot_y),
+        bitmap,
+    )
+end
+
+"An owned busy-counter metadata snapshot."
+struct BufferBusy
+    flags::UInt32
+    count::UInt32
+end
+
+"An owned explicit-synchronization timeline snapshot."
+struct BufferSyncTimeline
+    flags::UInt32
+    acquire_point::UInt64
+    release_point::UInt64
+end
+
 function _require_available(buffer::StreamBuffer)
     buffer.handle == C_NULL &&
         throw(InvalidStateException("the PipeWire stream buffer was already returned", :returned))
     return buffer.handle
+end
+
+function _spa_buffer(buffer::StreamBuffer)
+    pointer = unsafe_load(_require_available(buffer)).buffer
+    pointer == C_NULL &&
+        throw(InvalidStateException("the stream buffer has no SPA buffer", :no_buffer))
+    return pointer
+end
+
+"Copy the mutable accounting fields attached to a stream buffer."
+function buffer_info(buffer::StreamBuffer)
+    native = unsafe_load(_require_available(buffer))
+    return StreamBufferInfo(native.user_data, native.size, native.requested, native.time)
+end
+
+"Set the application-defined size accounting field on a dequeued buffer."
+function set_buffer_size!(buffer::StreamBuffer, size::Integer)
+    0 <= size <= typemax(UInt64) ||
+        throw(ArgumentError("stream buffer size is outside UInt64 range"))
+    pointer = _require_available(buffer)
+    native = unsafe_load(pointer)
+    unsafe_store!(
+        pointer,
+        LibPipeWire.pw_buffer(
+            native.buffer,
+            native.user_data,
+            UInt64(size),
+            native.requested,
+            native.time,
+        ),
+    )
+    return buffer
+end
+
+"Return the number of metadata entries attached to a stream buffer."
+metadata_count(buffer::StreamBuffer) = Int(unsafe_load(_spa_buffer(buffer)).n_metas)
+
+"Return a borrowed metadata entry by one-based index."
+function buffer_metadata(buffer::StreamBuffer, index::Integer)
+    count = metadata_count(buffer)
+    1 <= index <= count || throw(BoundsError(1:count, index))
+    return StreamMetadata(buffer, Int(index))
+end
+
+"Return the first borrowed metadata entry of `type`, or `nothing`."
+function buffer_metadata(buffer::StreamBuffer, type::UInt32)
+    count = metadata_count(buffer)
+    for index in 1:count
+        metadata = StreamMetadata(buffer, index)
+        metadata_type(metadata) == type && return metadata
+    end
+    return nothing
+end
+
+function _native_metadata(metadata::StreamMetadata)
+    buffer = unsafe_load(_spa_buffer(metadata.buffer))
+    1 <= metadata.index <= Int(buffer.n_metas) ||
+        throw(InvalidStateException("the metadata entry is unavailable", :unavailable))
+    buffer.metas == C_NULL &&
+        throw(InvalidStateException("the stream buffer has no metadata array", :no_metadata))
+    return unsafe_load(buffer.metas, metadata.index)
+end
+
+metadata_type(metadata::StreamMetadata) = _native_metadata(metadata).type
+metadata_size(metadata::StreamMetadata) = Int(_native_metadata(metadata).size)
+metadata_pointer(metadata::StreamMetadata) = _native_metadata(metadata).data
+
+"Return a borrowed byte view of a metadata payload."
+function metadata_bytes(metadata::StreamMetadata)
+    native = _native_metadata(metadata)
+    native.data == C_NULL && return UInt8[]
+    return unsafe_wrap(Vector{UInt8}, Ptr{UInt8}(native.data), Int(native.size); own=false)
+end
+
+function _typed_metadata(buffer::StreamBuffer, type::UInt32, ::Type{T}) where {T}
+    metadata = buffer_metadata(buffer, type)
+    metadata === nothing && return nothing
+    native = _native_metadata(metadata)
+    native.size >= sizeof(T) || throw(
+        InvalidStateException("the stream metadata payload is truncated", :truncated),
+    )
+    native.data == C_NULL &&
+        throw(InvalidStateException("the stream metadata payload is unavailable", :unavailable))
+    return unsafe_load(Ptr{T}(native.data))
+end
+
+"Return copied SPA header metadata, or `nothing` when absent."
+function buffer_header(buffer::StreamBuffer)
+    native = _typed_metadata(
+        buffer,
+        LibPipeWire.SPA_META_Header,
+        LibPipeWire.spa_meta_header,
+    )
+    native === nothing && return nothing
+    return BufferHeader(
+        native.flags,
+        native.offset,
+        native.pts,
+        native.dts_offset,
+        native.seq,
+    )
+end
+
+function _buffer_region(native::LibPipeWire.spa_meta_region)
+    return BufferRegion(
+        native.region.position.x,
+        native.region.position.y,
+        native.region.size.width,
+        native.region.size.height,
+    )
+end
+
+"Return copied video-crop metadata, or `nothing` when absent."
+function video_crop(buffer::StreamBuffer)
+    native = _typed_metadata(
+        buffer,
+        LibPipeWire.SPA_META_VideoCrop,
+        LibPipeWire.spa_meta_region,
+    )
+    return native === nothing ? nothing : _buffer_region(native)
+end
+
+"Return all valid copied video-damage regions."
+function video_damage(buffer::StreamBuffer)
+    metadata = buffer_metadata(buffer, LibPipeWire.SPA_META_VideoDamage)
+    metadata === nothing && return BufferRegion[]
+    native = _native_metadata(metadata)
+    count = Int(native.size) ÷ sizeof(LibPipeWire.spa_meta_region)
+    native.data == C_NULL && return BufferRegion[]
+    regions = BufferRegion[]
+    sizehint!(regions, count)
+    pointer = Ptr{LibPipeWire.spa_meta_region}(native.data)
+    for index in 1:count
+        region = _buffer_region(unsafe_load(pointer, index))
+        (region.width == 0 || region.height == 0) && break
+        push!(regions, region)
+    end
+    return regions
+end
+
+function _copy_buffer_bitmap(pointer::Ptr{Cvoid}, available::Int)
+    available >= sizeof(LibPipeWire.spa_meta_bitmap) || throw(
+        InvalidStateException("the bitmap metadata payload is truncated", :truncated),
+    )
+    native = unsafe_load(Ptr{LibPipeWire.spa_meta_bitmap}(pointer))
+    data = if native.offset == 0
+        UInt8[]
+    else
+        sizeof(LibPipeWire.spa_meta_bitmap) <= native.offset <= available || throw(
+            InvalidStateException("the bitmap metadata offset is invalid", :invalid_offset),
+        )
+        copy(
+            unsafe_wrap(
+                Vector{UInt8},
+                Ptr{UInt8}(pointer) + Int(native.offset),
+                available - Int(native.offset);
+                own=false,
+            ),
+        )
+    end
+    return BufferBitmap(
+        native.format,
+        native.size.width,
+        native.size.height,
+        native.stride,
+        data,
+    )
+end
+
+"Return copied inline-bitmap metadata, or `nothing` when absent."
+function buffer_bitmap(buffer::StreamBuffer)
+    metadata = buffer_metadata(buffer, LibPipeWire.SPA_META_Bitmap)
+    metadata === nothing && return nothing
+    native = _native_metadata(metadata)
+    native.data == C_NULL &&
+        throw(InvalidStateException("the bitmap metadata is unavailable", :unavailable))
+    return _copy_buffer_bitmap(native.data, Int(native.size))
+end
+
+"Return copied cursor metadata, or `nothing` when absent."
+function buffer_cursor(buffer::StreamBuffer)
+    metadata = buffer_metadata(buffer, LibPipeWire.SPA_META_Cursor)
+    metadata === nothing && return nothing
+    native = _native_metadata(metadata)
+    native.size >= sizeof(LibPipeWire.spa_meta_cursor) || throw(
+        InvalidStateException("the cursor metadata payload is truncated", :truncated),
+    )
+    native.data == C_NULL &&
+        throw(InvalidStateException("the cursor metadata is unavailable", :unavailable))
+    cursor = unsafe_load(Ptr{LibPipeWire.spa_meta_cursor}(native.data))
+    bitmap = if cursor.bitmap_offset == 0
+        nothing
+    else
+        sizeof(LibPipeWire.spa_meta_cursor) <= cursor.bitmap_offset < native.size || throw(
+            InvalidStateException("the cursor bitmap offset is invalid", :invalid_offset),
+        )
+        _copy_buffer_bitmap(
+            Ptr{Cvoid}(Ptr{UInt8}(native.data) + Int(cursor.bitmap_offset)),
+            Int(native.size - cursor.bitmap_offset),
+        )
+    end
+    return BufferCursor(
+        cursor.id,
+        cursor.flags,
+        cursor.position.x,
+        cursor.position.y,
+        cursor.hotspot.x,
+        cursor.hotspot.y,
+        bitmap,
+    )
+end
+
+"Return copied timed-control sequence metadata, or `nothing` when absent."
+function buffer_control(buffer::StreamBuffer)
+    metadata = buffer_metadata(buffer, LibPipeWire.SPA_META_Control)
+    metadata === nothing && return nothing
+    native = _native_metadata(metadata)
+    native.data == C_NULL &&
+        throw(InvalidStateException("the control metadata is unavailable", :unavailable))
+    native.size >= sizeof(LibPipeWire.spa_pod) || throw(
+        InvalidStateException("the control metadata payload is truncated", :truncated),
+    )
+    header = unsafe_load(Ptr{LibPipeWire.spa_pod}(native.data))
+    sizeof(LibPipeWire.spa_pod) + Int(header.size) <= Int(native.size) || throw(
+        InvalidStateException("the control metadata POD is truncated", :truncated),
+    )
+    return _copy_pod(Ptr{LibPipeWire.spa_pod}(native.data))
+end
+
+"Return copied buffer-busy metadata, or `nothing` when absent."
+function buffer_busy(buffer::StreamBuffer)
+    native = _typed_metadata(
+        buffer,
+        LibPipeWire.SPA_META_Busy,
+        LibPipeWire.spa_meta_busy,
+    )
+    return native === nothing ? nothing : BufferBusy(native.flags, native.count)
+end
+
+"Return copied video-transform metadata, or `nothing` when absent."
+function video_transform(buffer::StreamBuffer)
+    native = _typed_metadata(
+        buffer,
+        LibPipeWire.SPA_META_VideoTransform,
+        LibPipeWire.spa_meta_videotransform,
+    )
+    return native === nothing ? nothing : native.transform
+end
+
+"Return copied explicit-sync timeline metadata, or `nothing` when absent."
+function sync_timeline(buffer::StreamBuffer)
+    native = _typed_metadata(
+        buffer,
+        LibPipeWire.SPA_META_SyncTimeline,
+        LibPipeWire.spa_meta_sync_timeline,
+    )
+    native === nothing && return nothing
+    return BufferSyncTimeline(native.flags, native.acquire_point, native.release_point)
 end
 
 """
@@ -848,6 +1219,13 @@ struct StreamData
     index::Int
 end
 
+"An explicitly memory-mapped stream data plane."
+mutable struct MappedStreamData
+    pointer::Ptr{UInt8}
+    length::Int
+    data::StreamData
+end
+
 "Return a borrowed data-plane view from a dequeued stream buffer."
 function buffer_data(buffer::StreamBuffer, index::Integer=1)
     native_buffer = unsafe_load(_require_available(buffer)).buffer
@@ -861,6 +1239,150 @@ function _native_data(data::StreamData)
     native_buffer = unsafe_load(_require_available(data.buffer)).buffer
     buffer = unsafe_load(native_buffer)
     return unsafe_load(buffer.datas, data.index)
+end
+
+"Return the SPA memory type for a stream data plane."
+data_type(data::StreamData) = _native_data(data).type
+"Return the SPA memory flags for a stream data plane."
+data_flags(data::StreamData) = _native_data(data).flags
+"Return the file descriptor for a stream data plane, or `-1` when absent."
+data_fd(data::StreamData) = _native_data(data).fd
+"Return the page-aligned mapping offset for a file-backed data plane."
+data_map_offset(data::StreamData) = _native_data(data).mapoffset
+"Return whether a stream data plane already has a native memory mapping."
+is_mapped(data::StreamData) = _native_data(data).data != C_NULL
+
+"""
+    allocate_buffer!(stream, buffer, sizes; flags=0x3)
+
+Allocate Julia-owned `MemPtr` storage for every native data plane in `buffer`.
+Call this from `on_buffer_added` when connecting with
+[`STREAM_ALLOC_BUFFERS`](@ref). The stream roots the storage until the native
+buffer is removed. `buffer` is the raw pointer supplied to that callback.
+"""
+function allocate_buffer!(
+    stream::Stream,
+    buffer::Ptr{LibPipeWire.pw_buffer},
+    sizes;
+    flags::Integer=UInt32(3),
+)
+    buffer == C_NULL && throw(ArgumentError("the native stream buffer is null"))
+    native_flags = _core_uint32(flags, "buffer data flags")
+    requested_sizes = Int[]
+    for size in sizes
+        0 <= size <= typemax(UInt32) ||
+            throw(ArgumentError("buffer data size is outside UInt32 range"))
+        push!(requested_sizes, Int(size))
+    end
+    lock(stream.state_lock)
+    try
+        _require_open(stream)
+        native_buffer = unsafe_load(buffer).buffer
+        native_buffer == C_NULL &&
+            throw(InvalidStateException("the stream buffer has no SPA buffer", :no_buffer))
+        spa_buffer = unsafe_load(native_buffer)
+        length(requested_sizes) == Int(spa_buffer.n_datas) || throw(
+            DimensionMismatch("one allocation size is required for each stream data plane"),
+        )
+        spa_buffer.datas == C_NULL && !isempty(requested_sizes) && throw(
+            InvalidStateException("the stream buffer has no data array", :no_data),
+        )
+
+        storage = [Vector{UInt8}(undef, size) for size in requested_sizes]
+        GC.@preserve storage begin
+            for index in eachindex(storage)
+                current = unsafe_load(spa_buffer.datas, index)
+                unsafe_store!(
+                    spa_buffer.datas,
+                    LibPipeWire.spa_data(
+                        LibPipeWire.SPA_DATA_MemPtr,
+                        native_flags,
+                        Int64(-1),
+                        UInt32(0),
+                        UInt32(length(storage[index])),
+                        pointer(storage[index]),
+                        current.chunk,
+                    ),
+                    index,
+                )
+            end
+        end
+        stream.buffer_owners[buffer] = storage
+        return storage
+    finally
+        unlock(stream.state_lock)
+    end
+end
+
+allocate_buffer!(
+    stream::Stream,
+    buffer::Ptr{LibPipeWire.pw_buffer},
+    size::Integer;
+    flags::Integer=UInt32(3),
+) = allocate_buffer!(stream, buffer, (size,); flags)
+
+"""
+    map_data(data; writable=false)
+
+Map an fd-backed `MemFd` or mappable `DmaBuf` plane. Close the returned mapping
+before queueing or returning its buffer. DMA-BUF synchronization remains the
+caller's responsibility.
+"""
+function map_data(data::StreamData; writable::Bool=false)
+    native = _native_data(data)
+    native.data == C_NULL ||
+        throw(InvalidStateException("the stream data plane is already mapped", :mapped))
+    native.type in (LibPipeWire.SPA_DATA_MemFd, LibPipeWire.SPA_DATA_DmaBuf) || throw(
+        InvalidStateException("the stream data plane is not fd-backed", :not_fd_backed),
+    )
+    native.type != LibPipeWire.SPA_DATA_DmaBuf || native.flags & UInt32(1 << 3) != 0 ||
+        throw(InvalidStateException("the DMA-BUF data plane is not mappable", :not_mappable))
+    typemin(Cint) <= native.fd <= typemax(Cint) ||
+        throw(InvalidStateException("the stream data file descriptor is invalid", :invalid_fd))
+    writable && native.flags & UInt32(1 << 1) == 0 && throw(
+        InvalidStateException("the stream data plane is not writable", :readonly),
+    )
+    native.maxsize == 0 && throw(
+        InvalidStateException("the stream data plane has zero capacity", :empty),
+    )
+
+    protection = Cint(1 | (writable ? 2 : 0))
+    pointer = ccall(
+        :mmap,
+        Ptr{Cvoid},
+        (Ptr{Cvoid}, Csize_t, Cint, Cint, Cint, Int64),
+        C_NULL,
+        Csize_t(native.maxsize),
+        protection,
+        Cint(1),
+        Cint(native.fd),
+        Int64(native.mapoffset),
+    )
+    pointer == Ptr{Cvoid}(typemax(UInt)) &&
+        throw(PipeWireError(:mmap, -Base.Libc.errno()))
+    mapping = MappedStreamData(Ptr{UInt8}(pointer), Int(native.maxsize), data)
+    finalizer(close, mapping)
+    return mapping
+end
+
+function Base.isopen(mapping::MappedStreamData)
+    return mapping.pointer != C_NULL
+end
+
+function Base.close(mapping::MappedStreamData)
+    mapping.pointer == C_NULL && return nothing
+    result = ccall(:munmap, Cint, (Ptr{Cvoid}, Csize_t), mapping.pointer, mapping.length)
+    result < 0 && throw(PipeWireError(:munmap, -Base.Libc.errno()))
+    mapping.pointer = Ptr{UInt8}(C_NULL)
+    mapping.length = 0
+    return nothing
+end
+
+"Return the full borrowed byte view of an open explicit mapping."
+function bytes(mapping::MappedStreamData)
+    mapping.pointer == C_NULL &&
+        throw(InvalidStateException("the stream data mapping is closed", :closed))
+    return unsafe_wrap(Vector{UInt8}, mapping.pointer, mapping.length; own=false)
 end
 
 "Return the writable capacity in bytes of a stream data plane."

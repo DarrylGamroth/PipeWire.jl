@@ -173,6 +173,15 @@ its callback. Stream properties, parameters, controls, timing, error state,
 adaptive rate, graph-driving state, and SPA event emission have corresponding
 managed methods.
 
+`StreamBuffer` exposes all SPA data planes and metadata without hiding their
+native lifetime. Header, crop, damage, bitmap, cursor, busy, transform, and
+explicit-sync timeline accessors return owned snapshots. File-backed `MemFd`
+and explicitly mappable `DmaBuf` planes can be scoped with `map_data` and
+`close`; DMA-BUF synchronization remains the application's responsibility.
+With `STREAM_ALLOC_BUFFERS`, call `allocate_buffer!` from `on_buffer_added` to
+install Julia-owned `MemPtr` planes. The stream roots those allocations until
+PipeWire removes the corresponding native buffer.
+
 ```julia
 using PipeWire
 

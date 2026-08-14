@@ -570,6 +570,17 @@ include("filter.jl")
     @test all(isconcretetype, fieldtypes(StreamControl))
     @test all(isconcretetype, fieldtypes(StreamIO))
     @test all(isconcretetype, fieldtypes(StreamTime))
+    @test all(isconcretetype, fieldtypes(StreamBufferInfo))
+    @test all(isconcretetype, fieldtypes(StreamMetadata))
+    @test all(isconcretetype, fieldtypes(BufferHeader))
+    @test all(isconcretetype, fieldtypes(BufferRegion))
+    @test all(isconcretetype, fieldtypes(BufferBitmap))
+    @test all(isconcretetype, fieldtypes(BufferBusy))
+    @test all(isconcretetype, fieldtypes(BufferSyncTimeline))
+    @test all(
+        isconcretetype,
+        fieldtypes(typeof(BufferCursor(1, 2, 3, 4, 5, 6, nothing))),
+    )
     @test callback_allocations(stream) == 0
     @test process_count[] == 2
     @test stream_state(stream) == PipeWire.LibPipeWire.PW_STREAM_STATE_UNCONNECTED
@@ -655,6 +666,73 @@ include("filter.jl")
 
     storage = collect(UInt8(1):UInt8(16))
     chunk = Ref(PipeWire.LibPipeWire.spa_chunk(UInt32(2), UInt32(4), Int32(2), Int32(0)))
+    header = Ref(
+        PipeWire.LibPipeWire.spa_meta_header(
+            UInt32(5),
+            UInt32(6),
+            Int64(7),
+            Int64(-8),
+            UInt64(9),
+        ),
+    )
+    crop = Ref(
+        PipeWire.LibPipeWire.spa_meta_region(
+            PipeWire.LibPipeWire.spa_region(
+                PipeWire.LibPipeWire.spa_point(Int32(10), Int32(11)),
+                PipeWire.LibPipeWire.spa_rectangle(UInt32(12), UInt32(13)),
+            ),
+        ),
+    )
+    damage = [
+        PipeWire.LibPipeWire.spa_meta_region(
+            PipeWire.LibPipeWire.spa_region(
+                PipeWire.LibPipeWire.spa_point(Int32(1), Int32(2)),
+                PipeWire.LibPipeWire.spa_rectangle(UInt32(3), UInt32(4)),
+            ),
+        ),
+        PipeWire.LibPipeWire.spa_meta_region(
+            PipeWire.LibPipeWire.spa_region(
+                PipeWire.LibPipeWire.spa_point(Int32(0), Int32(0)),
+                PipeWire.LibPipeWire.spa_rectangle(UInt32(0), UInt32(0)),
+            ),
+        ),
+    ]
+    transform = Ref(PipeWire.LibPipeWire.spa_meta_videotransform(UInt32(2)))
+    timeline = Ref(
+        PipeWire.LibPipeWire.spa_meta_sync_timeline(
+            UInt32(1),
+            UInt32(0),
+            UInt64(20),
+            UInt64(21),
+        ),
+    )
+    metas = PipeWire.LibPipeWire.spa_meta[
+        PipeWire.LibPipeWire.spa_meta(
+            PipeWire.LibPipeWire.SPA_META_Header,
+            UInt32(sizeof(PipeWire.LibPipeWire.spa_meta_header)),
+            Base.unsafe_convert(Ptr{Cvoid}, header),
+        ),
+        PipeWire.LibPipeWire.spa_meta(
+            PipeWire.LibPipeWire.SPA_META_VideoCrop,
+            UInt32(sizeof(PipeWire.LibPipeWire.spa_meta_region)),
+            Base.unsafe_convert(Ptr{Cvoid}, crop),
+        ),
+        PipeWire.LibPipeWire.spa_meta(
+            PipeWire.LibPipeWire.SPA_META_VideoDamage,
+            UInt32(sizeof(PipeWire.LibPipeWire.spa_meta_region) * length(damage)),
+            Ptr{Cvoid}(pointer(damage)),
+        ),
+        PipeWire.LibPipeWire.spa_meta(
+            PipeWire.LibPipeWire.SPA_META_VideoTransform,
+            UInt32(sizeof(PipeWire.LibPipeWire.spa_meta_videotransform)),
+            Base.unsafe_convert(Ptr{Cvoid}, transform),
+        ),
+        PipeWire.LibPipeWire.spa_meta(
+            PipeWire.LibPipeWire.SPA_META_SyncTimeline,
+            UInt32(sizeof(PipeWire.LibPipeWire.spa_meta_sync_timeline)),
+            Base.unsafe_convert(Ptr{Cvoid}, timeline),
+        ),
+    ]
     native_data = Ref(
         PipeWire.LibPipeWire.spa_data(
             PipeWire.LibPipeWire.SPA_DATA_MemPtr,
@@ -668,9 +746,9 @@ include("filter.jl")
     )
     spa_buffer = Ref(
         PipeWire.LibPipeWire.spa_buffer(
-            UInt32(0),
+            UInt32(length(metas)),
             UInt32(1),
-            C_NULL,
+            pointer(metas),
             Base.unsafe_convert(Ptr{PipeWire.LibPipeWire.spa_data}, native_data),
         ),
     )
@@ -683,17 +761,97 @@ include("filter.jl")
             UInt64(0),
         ),
     )
-    GC.@preserve storage chunk native_data spa_buffer native_buffer begin
+    GC.@preserve storage chunk header crop damage transform timeline metas native_data spa_buffer native_buffer begin
         borrowed = StreamBuffer(
             Base.unsafe_convert(Ptr{PipeWire.LibPipeWire.pw_buffer}, native_buffer),
         )
         data = buffer_data(borrowed)
+        @test buffer_info(borrowed) == StreamBufferInfo(C_NULL, 0, 0, 0)
+        @test set_buffer_size!(borrowed, 15) === borrowed
+        @test buffer_info(borrowed).size == 15
+        @test metadata_count(borrowed) == 5
+        @test metadata_type(buffer_metadata(borrowed, 1)) ==
+              PipeWire.LibPipeWire.SPA_META_Header
+        @test metadata_size(buffer_metadata(borrowed, PipeWire.LibPipeWire.SPA_META_Header)) ==
+              sizeof(PipeWire.LibPipeWire.spa_meta_header)
+        @test length(metadata_bytes(buffer_metadata(borrowed, 1))) ==
+              sizeof(PipeWire.LibPipeWire.spa_meta_header)
+        @test buffer_header(borrowed) == BufferHeader(5, 6, 7, -8, 9)
+        @test video_crop(borrowed) == BufferRegion(10, 11, 12, 13)
+        @test video_damage(borrowed) == [BufferRegion(1, 2, 3, 4)]
+        @test video_transform(borrowed) == 2
+        @test sync_timeline(borrowed) == BufferSyncTimeline(1, 20, 21)
+        @test buffer_metadata(borrowed, UInt32(500)) === nothing
+        @test data_type(data) == PipeWire.LibPipeWire.SPA_DATA_MemPtr
+        @test data_flags(data) == 0
+        @test data_fd(data) == -1
+        @test data_map_offset(data) == 0
+        @test is_mapped(data)
+        @test_throws InvalidStateException map_data(data)
         @test capacity(data) == 16
         @test data_pointer(data) == pointer(storage)
         @test bytes(data) == UInt8[3, 4, 5, 6]
         set_chunk!(data; offset=0, size=8, stride=4)
         @test length(bytes(data)) == 8
         @test writable_bytes(data) == storage
+
+        allocated = allocate_buffer!(
+            stream,
+            Base.unsafe_convert(Ptr{PipeWire.LibPipeWire.pw_buffer}, native_buffer),
+            32,
+        )
+        @test length(allocated) == 1
+        @test length(allocated[1]) == 32
+        @test data_type(data) == PipeWire.LibPipeWire.SPA_DATA_MemPtr
+        @test data_flags(data) == 3
+        @test data_pointer(data) == pointer(allocated[1])
+    end
+
+    mktemp() do _, io
+        truncate(io, 4096)
+        file_chunk = Ref(
+            PipeWire.LibPipeWire.spa_chunk(UInt32(0), UInt32(0), Int32(0), Int32(0)),
+        )
+        file_data = Ref(
+            PipeWire.LibPipeWire.spa_data(
+                PipeWire.LibPipeWire.SPA_DATA_MemFd,
+                UInt32(3),
+                Int64(reinterpret(Int32, Base.fd(io))),
+                UInt32(0),
+                UInt32(4096),
+                C_NULL,
+                Base.unsafe_convert(Ptr{PipeWire.LibPipeWire.spa_chunk}, file_chunk),
+            ),
+        )
+        file_spa_buffer = Ref(
+            PipeWire.LibPipeWire.spa_buffer(
+                UInt32(0),
+                UInt32(1),
+                C_NULL,
+                Base.unsafe_convert(Ptr{PipeWire.LibPipeWire.spa_data}, file_data),
+            ),
+        )
+        file_buffer = Ref(
+            PipeWire.LibPipeWire.pw_buffer(
+                Base.unsafe_convert(Ptr{PipeWire.LibPipeWire.spa_buffer}, file_spa_buffer),
+                C_NULL,
+                UInt64(0),
+                UInt64(0),
+                UInt64(0),
+            ),
+        )
+        GC.@preserve file_chunk file_data file_spa_buffer file_buffer begin
+            borrowed = StreamBuffer(
+                Base.unsafe_convert(Ptr{PipeWire.LibPipeWire.pw_buffer}, file_buffer),
+            )
+            mapping = map_data(buffer_data(borrowed); writable=true)
+            @test isopen(mapping)
+            @test length(bytes(mapping)) == 4096
+            bytes(mapping)[1] = 0x5a
+            close(mapping)
+            @test !isopen(mapping)
+            close(mapping)
+        end
     end
 
     close(stream)

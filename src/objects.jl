@@ -6,6 +6,7 @@ const _METADATA_INTERFACE = "PipeWire:Interface:Metadata"
 const _FACTORY_INTERFACE = "PipeWire:Interface:Factory"
 const _MODULE_INTERFACE = "PipeWire:Interface:Module"
 const _CLIENT_INTERFACE = "PipeWire:Interface:Client"
+const _PROFILER_INTERFACE = "PipeWire:Interface:Profiler"
 const _OBJECT_INTERFACE_VERSION = UInt32(3)
 
 "The input or output direction of a PipeWire port."
@@ -237,6 +238,7 @@ for (name, event_type) in (
     (:Factory, :(LibPipeWire.pw_factory_events)),
     (:PipeWireModule, :(LibPipeWire.pw_module_events)),
     (:Client, :(LibPipeWire.pw_client_events)),
+    (:Profiler, :(LibPipeWire.pw_profiler_events)),
 )
     @eval begin
         mutable struct $name{ProxyType<:Proxy,Callbacks}
@@ -300,7 +302,11 @@ PipeWireModule
 "An owning typed proxy for a connected PipeWire client."
 Client
 
-const ManagedObject = Union{Node,Port,Device,Link,Metadata,Factory,PipeWireModule,Client}
+"An owning typed proxy for PipeWire profiling samples."
+Profiler
+
+const ManagedObject =
+    Union{Node,Port,Device,Link,Metadata,Factory,PipeWireModule,Client,Profiler}
 
 function _invoke_object_callback(object::ManagedObject, ::Val{Field}, args...) where {Field}
     lock(object.callback_lock)
@@ -566,6 +572,18 @@ function _metadata_property(
     return Cint(0)
 end
 
+function _profiler_profile(
+    profiler::Profiler,
+    pod::Ptr{LibPipeWire.spa_pod},
+)::Cvoid
+    try
+        _invoke_object_callback(profiler, Val(:on_profile), _copy_pod(pod))
+    catch error
+        _record_object_callback_error(profiler, error)
+    end
+    return nothing
+end
+
 function _node_events(::T) where {T<:Node}
     info = @cfunction(_node_info, Cvoid, (Ref{T}, Ptr{LibPipeWire.pw_node_info}))
     param = @cfunction(
@@ -612,6 +630,15 @@ function _metadata_events(::T) where {T<:Metadata}
         (Ref{T}, UInt32, Cstring, Cstring, Cstring),
     )
     return LibPipeWire.pw_metadata_events(UInt32(0), property)
+end
+
+function _profiler_events(::T) where {T<:Profiler}
+    profile = @cfunction(
+        _profiler_profile,
+        Cvoid,
+        (Ref{T}, Ptr{LibPipeWire.spa_pod}),
+    )
+    return LibPipeWire.pw_profiler_events(UInt32(0), profile)
 end
 
 function _factory_events(::T) where {T<:Factory}
@@ -1019,6 +1046,58 @@ function _attach_metadata(proxy::Proxy, on_property)
     return object
 end
 
+function _with_profiler_method(call, object::Profiler, field::Symbol)
+    return _with_object_handle(object, LibPipeWire.pw_profiler) do handle
+        interface = unsafe_load(Ptr{LibPipeWire.spa_interface}(handle))
+        interface.cb.funcs == C_NULL && throw(
+            PipeWireError(Symbol("pw_profiler_", field), -Base.Libc.ENOTSUP),
+        )
+        methods = unsafe_load(Ptr{LibPipeWire.pw_profiler_methods}(interface.cb.funcs))
+        method = getfield(methods, field)
+        method == C_NULL && throw(
+            PipeWireError(Symbol("pw_profiler_", field), -Base.Libc.ENOTSUP),
+        )
+        return call(interface.cb.data, method)
+    end
+end
+
+function _attach_profiler(proxy::Proxy, on_profile)
+    listener = Ref(_zero_hook())
+    events = Ref{LibPipeWire.pw_profiler_events}()
+    callbacks = (on_profile=on_profile,)
+    object = Profiler(
+        proxy,
+        ReentrantLock(),
+        listener,
+        events,
+        callbacks,
+        Ref{Any}(nothing),
+        true,
+    )
+    try
+        events[] = _profiler_events(object)
+    catch
+        close(object)
+        rethrow()
+    end
+    result = try
+        _with_profiler_method(object, :add_listener) do data, method
+            GC.@preserve object listener events @ccall $method(
+                data::Ptr{Cvoid},
+                Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener)::Ptr{LibPipeWire.spa_hook},
+                Base.unsafe_convert(Ptr{LibPipeWire.pw_profiler_events}, events)::Ptr{LibPipeWire.pw_profiler_events},
+                pointer_from_objref(object)::Ptr{Cvoid},
+            )::Cint
+        end
+    catch
+        close(object)
+        rethrow()
+    end
+    result < 0 && (close(object); throw(PipeWireError(:pw_profiler_add_listener, result)))
+    finalizer(close, object)
+    return object
+end
+
 """
     bind(registry, global_object, Metadata; callbacks...) -> Metadata
 
@@ -1040,6 +1119,45 @@ function Base.bind(
     proxy_callbacks = _proxy_callback_keywords(on_bound, on_removed, on_done, on_error, on_bound_properties)
     proxy = _typed_proxy(registry, global_object, _METADATA_INTERFACE, version; proxy_callbacks...)
     return _attach_metadata(proxy, on_property)
+end
+
+"""
+    bind(registry, global_object, Profiler; on_profile=nothing, callbacks...)
+
+Bind the profiler extension. `on_profile(profiler, pod)` receives an owned copy
+of each profiling POD, safe to retain after the callback returns.
+"""
+function Base.bind(
+    registry::Registry,
+    global_object::Global,
+    ::Type{Profiler};
+    version::Integer=min(global_object.version, _OBJECT_INTERFACE_VERSION),
+    on_profile=nothing,
+    on_bound=nothing,
+    on_removed=nothing,
+    on_done=nothing,
+    on_error=nothing,
+    on_bound_properties=nothing,
+)
+    _ensure_context_module!(
+        registry.core.context,
+        "libpipewire-module-profiler",
+    )
+    proxy_callbacks = _proxy_callback_keywords(
+        on_bound,
+        on_removed,
+        on_done,
+        on_error,
+        on_bound_properties,
+    )
+    proxy = _typed_proxy(
+        registry,
+        global_object,
+        _PROFILER_INTERFACE,
+        version;
+        proxy_callbacks...,
+    )
+    return _attach_profiler(proxy, on_profile)
 end
 
 """

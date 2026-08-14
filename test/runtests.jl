@@ -137,6 +137,17 @@ function invoke_core_bound_properties(core::T, dictionary) where {T<:CoreConnect
     return nothing
 end
 
+function invoke_profile_callback(profiler::T, profile::Pod) where {T<:Profiler}
+    GC.@preserve profiler profile ccall(
+        getfield(profiler, :events)[].profile,
+        Cvoid,
+        (Ref{T}, Ptr{PipeWire.LibPipeWire.spa_pod}),
+        profiler,
+        PipeWire._pod_pointer(profile),
+    )
+    return nothing
+end
+
 @testset "Clang.jl-generated C bindings" begin
     raw_version = PipeWire.LibPipeWire.pw_get_library_version()
     @test raw_version != C_NULL
@@ -258,6 +269,8 @@ end
     loop = MainLoop()
     context = Context(loop; properties=Dict("application.name" => "PipeWire.jl context"))
     @test isopen(context)
+    @test isconcretetype(typeof(context))
+    @test all(isconcretetype, fieldtypes(typeof(context)))
     @test main_loop(context) === loop
     @test context_properties(context)["application.name"] == "PipeWire.jl context"
     @test update_properties!(context, Dict("pipewire.jl.context" => "updated")) === context
@@ -396,6 +409,8 @@ end
 
 @testset "typed PipeWire objects" begin
     context = Context()
+    @test enable_profiler!(context) === context
+    @test enable_profiler!(context) === context
     core = CoreConnection(context; self=true)
     registry = Registry(core)
     roundtrip(registry)
@@ -479,10 +494,15 @@ end
         global_object for global_object in globals(registry) if
         global_object.type == "PipeWire:Interface:Client"
     )
+    profiler_global = only(
+        global_object for global_object in globals(registry) if
+        global_object.type == "PipeWire:Interface:Profiler"
+    )
     factory_infos = FactoryInfo[]
     module_infos = ModuleInfo[]
     client_infos = ClientInfo[]
     permission_events = Tuple{UInt32,Vector{Permission}}[]
+    profiles = Pod[]
     factory = bind(
         registry,
         factory_global,
@@ -503,9 +523,20 @@ end
         on_permissions=(client, index, permissions) ->
             push!(permission_events, (index, permissions)),
     )
+    profiler = bind(
+        registry,
+        profiler_global,
+        Profiler;
+        on_profile=(profiler, profile) -> push!(profiles, profile),
+    )
     @test all(isconcretetype, fieldtypes(typeof(factory)))
     @test all(isconcretetype, fieldtypes(typeof(module_object)))
     @test all(isconcretetype, fieldtypes(typeof(client)))
+    @test all(isconcretetype, fieldtypes(typeof(profiler)))
+    sample_profile = Pod(Int64(42))
+    invoke_profile_callback(profiler, sample_profile)
+    @test length(profiles) == 1
+    @test pod_value(Int64, only(profiles)) == 42
     roundtrip(registry)
     @test only(factory_infos).id == factory_global.id
     @test !isempty(only(factory_infos).name)
@@ -516,6 +547,7 @@ end
     roundtrip(registry)
     @test !isempty(permission_events)
     @test first(permission_events)[1] == 0
+    close(profiler)
     close(client)
     close(module_object)
     close(factory)
@@ -836,7 +868,7 @@ include("filter.jl")
             PipeWire.LibPipeWire.spa_data(
                 PipeWire.LibPipeWire.SPA_DATA_MemFd,
                 UInt32(3),
-                Int64(reinterpret(Int32, Base.fd(io))),
+                Int64(Cint(Base.fd(io))),
                 UInt32(0),
                 UInt32(4096),
                 C_NULL,

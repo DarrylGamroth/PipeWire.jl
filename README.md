@@ -15,6 +15,7 @@ The managed API currently includes main and threaded loops, owned event, timer,
 idle, I/O, and signal sources, typed loop channels, contexts, core connections,
 registry-global snapshots and binding, generic proxies, native-backed
 properties, typed node/port/device/link/metadata/factory/module/client proxies,
+profiler samples,
 typed core protocol events and methods, streams, multi-port filters, owned SPA
 PODs for raw-audio and raw-video formats, and mapped buffers.
 Native resources follow Julia's `close`/`isopen` conventions and enforce
@@ -52,6 +53,26 @@ with_registry() do registry
         close(metadata)
     end
 end
+```
+
+The managed `Profiler` proxy delivers each sample as an owned `Pod`. PipeWire's
+profiler protocol is supplied by a context module; binding a profiler from an
+external daemon loads that client-side module automatically. For an embedded
+core, enable it before connecting so the profiler global is also registered:
+
+```julia
+context = Context()
+enable_profiler!(context)
+core = CoreConnection(context; self=true)
+registry = Registry(core)
+roundtrip(registry)
+
+profiler_global = only(find_globals(
+    registry;
+    interface="PipeWire:Interface:Profiler",
+))
+profiler = bind(registry, profiler_global, Profiler;
+    on_profile=(profiler, sample) -> println("profile bytes: ", sizeof(sample)))
 ```
 
 Objects can also be created from server factories. Core-created proxies retain

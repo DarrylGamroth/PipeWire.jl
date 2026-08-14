@@ -7999,6 +7999,171 @@ function pw_unload_spa_handle(handle)
     @ccall libpipewire.pw_unload_spa_handle(handle::Ptr{spa_handle})::Cint
 end
 
+"""
+` pw_impl_module`
+
+\\{
+"""
+mutable struct pw_impl_module end
+
+# typedef int ( * pw_impl_module_init_func_t ) ( struct pw_impl_module * module , const char * args )
+"""
+Module init function signature
+
+A module should provide an init function with this signature. This function will be called when a module is loaded.
+
+# Arguments
+* `module`: A pw_impl_module
+* `args`: Arguments to the module
+# Returns
+0 on success, < 0 otherwise with an errno style error
+"""
+const pw_impl_module_init_func_t = Ptr{Cvoid}
+
+"""
+    pw_impl_module_events
+
+Module events added with pw_impl_module_add_listener
+
+| Field       | Note                                                                                                    |
+| :---------- | :------------------------------------------------------------------------------------------------------ |
+| destroy     | The module is destroyed. This is the time to unregister and destroy any objects created by the module.  |
+| free        | The module is freed. This will be called after destroy() returns.                                       |
+| initialized | The module is initialized                                                                               |
+| registered  | The module is registered. This is a good time to register objects created from the module.              |
+"""
+struct pw_impl_module_events
+    version::UInt32
+    destroy::Ptr{Cvoid}
+    free::Ptr{Cvoid}
+    initialized::Ptr{Cvoid}
+    registered::Ptr{Cvoid}
+end
+
+"""
+    pw_context_load_module(context, name, args, properties)
+
+### Prototype
+```c
+struct pw_impl_module * pw_context_load_module(struct pw_context *context, const char *name, const char *args, struct pw_properties *properties);
+```
+"""
+function pw_context_load_module(context, name, args, properties)
+    @ccall libpipewire.pw_context_load_module(context::Ptr{pw_context}, name::Cstring, args::Cstring, properties::Ptr{pw_properties})::Ptr{pw_impl_module}
+end
+
+"""
+    pw_impl_module_get_context(_module)
+
+Get the context of a module
+
+### Prototype
+```c
+struct pw_context * pw_impl_module_get_context(struct pw_impl_module *module);
+```
+"""
+function pw_impl_module_get_context(_module)
+    @ccall libpipewire.pw_impl_module_get_context(_module::Ptr{pw_impl_module})::Ptr{pw_context}
+end
+
+"""
+    pw_impl_module_get_global(_module)
+
+Get the global of a module
+
+### Prototype
+```c
+struct pw_global * pw_impl_module_get_global(struct pw_impl_module *module);
+```
+"""
+function pw_impl_module_get_global(_module)
+    @ccall libpipewire.pw_impl_module_get_global(_module::Ptr{pw_impl_module})::Ptr{pw_global}
+end
+
+"""
+    pw_impl_module_get_properties(_module)
+
+Get the module properties
+
+### Prototype
+```c
+const struct pw_properties *pw_impl_module_get_properties(struct pw_impl_module *module);
+```
+"""
+function pw_impl_module_get_properties(_module)
+    @ccall libpipewire.pw_impl_module_get_properties(_module::Ptr{pw_impl_module})::Ptr{pw_properties}
+end
+
+"""
+    pw_impl_module_update_properties(_module, dict)
+
+Update the module properties
+
+### Prototype
+```c
+int pw_impl_module_update_properties(struct pw_impl_module *module, const struct spa_dict *dict);
+```
+"""
+function pw_impl_module_update_properties(_module, dict)
+    @ccall libpipewire.pw_impl_module_update_properties(_module::Ptr{pw_impl_module}, dict::Ptr{spa_dict})::Cint
+end
+
+"""
+    pw_impl_module_get_info(_module)
+
+Get the module info
+
+### Prototype
+```c
+const struct pw_module_info *pw_impl_module_get_info(struct pw_impl_module *module);
+```
+"""
+function pw_impl_module_get_info(_module)
+    @ccall libpipewire.pw_impl_module_get_info(_module::Ptr{pw_impl_module})::Ptr{pw_module_info}
+end
+
+"""
+    pw_impl_module_add_listener(_module, listener, events, data)
+
+Add an event listener to a module
+
+### Prototype
+```c
+void pw_impl_module_add_listener(struct pw_impl_module *module, struct spa_hook *listener, const struct pw_impl_module_events *events, void *data);
+```
+"""
+function pw_impl_module_add_listener(_module, listener, events, data)
+    @ccall libpipewire.pw_impl_module_add_listener(_module::Ptr{pw_impl_module}, listener::Ptr{spa_hook}, events::Ptr{pw_impl_module_events}, data::Ptr{Cvoid})::Cvoid
+end
+
+"""
+    pw_impl_module_destroy(_module)
+
+Destroy a module
+
+### Prototype
+```c
+void pw_impl_module_destroy(struct pw_impl_module *module);
+```
+"""
+function pw_impl_module_destroy(_module)
+    @ccall libpipewire.pw_impl_module_destroy(_module::Ptr{pw_impl_module})::Cvoid
+end
+
+"""
+    pw_impl_module_schedule_destroy(_module)
+
+Schedule a destroy later on the main thread
+
+### Prototype
+```c
+void pw_impl_module_schedule_destroy(struct pw_impl_module *module);
+```
+"""
+function pw_impl_module_schedule_destroy(_module)
+    @ccall libpipewire.pw_impl_module_schedule_destroy(_module::Ptr{pw_impl_module})::Cvoid
+end
+
 mutable struct pw_metadata end
 
 """
@@ -9027,11 +9192,11 @@ struct spa_audio_info_mpegh
     rate::UInt32
 end
 
-struct __JL_Ctag_149
+struct __JL_Ctag_166
     data::NTuple{276, UInt8}
 end
 
-function Base.getproperty(x::Ptr{__JL_Ctag_149}, f::Symbol)
+function Base.getproperty(x::Ptr{__JL_Ctag_166}, f::Symbol)
     f === :raw && return Ptr{spa_audio_info_raw}(x + 0)
     f === :dsp && return Ptr{spa_audio_info_dsp}(x + 0)
     f === :iec958 && return Ptr{spa_audio_info_iec958}(x + 0)
@@ -9054,18 +9219,18 @@ function Base.getproperty(x::Ptr{__JL_Ctag_149}, f::Symbol)
     return getfield(x, f)
 end
 
-function Base.getproperty(x::__JL_Ctag_149, f::Symbol)
-    r = Ref{__JL_Ctag_149}(x)
-    ptr = Base.unsafe_convert(Ptr{__JL_Ctag_149}, r)
+function Base.getproperty(x::__JL_Ctag_166, f::Symbol)
+    r = Ref{__JL_Ctag_166}(x)
+    ptr = Base.unsafe_convert(Ptr{__JL_Ctag_166}, r)
     fptr = getproperty(ptr, f)
     GC.@preserve r unsafe_load(fptr)
 end
 
-function Base.setproperty!(x::Ptr{__JL_Ctag_149}, f::Symbol, v)
+function Base.setproperty!(x::Ptr{__JL_Ctag_166}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
-function Base.propertynames(x::__JL_Ctag_149, private::Bool = false)
+function Base.propertynames(x::__JL_Ctag_166, private::Bool = false)
     (:raw, :dsp, :iec958, :dsd, :mp3, :aac, :vorbis, :wma, :ra, :amr, :alac, :flac, :ape, :opus, :ac3, :eac3, :truehd, :dts, :mpegh, if private
             fieldnames(typeof(x))
         else
@@ -9087,7 +9252,7 @@ end
 function Base.getproperty(x::Ptr{spa_audio_info}, f::Symbol)
     f === :media_type && return Ptr{UInt32}(x + 0)
     f === :media_subtype && return Ptr{UInt32}(x + 4)
-    f === :info && return Ptr{__JL_Ctag_149}(x + 8)
+    f === :info && return Ptr{__JL_Ctag_166}(x + 8)
     return getfield(x, f)
 end
 
@@ -9669,11 +9834,11 @@ struct spa_video_info_mjpg
     max_framerate::spa_fraction
 end
 
-struct __JL_Ctag_150
+struct __JL_Ctag_167
     data::NTuple{88, UInt8}
 end
 
-function Base.getproperty(x::Ptr{__JL_Ctag_150}, f::Symbol)
+function Base.getproperty(x::Ptr{__JL_Ctag_167}, f::Symbol)
     f === :raw && return Ptr{spa_video_info_raw}(x + 0)
     f === :dsp && return Ptr{spa_video_info_dsp}(x + 0)
     f === :h264 && return Ptr{spa_video_info_h264}(x + 0)
@@ -9681,18 +9846,18 @@ function Base.getproperty(x::Ptr{__JL_Ctag_150}, f::Symbol)
     return getfield(x, f)
 end
 
-function Base.getproperty(x::__JL_Ctag_150, f::Symbol)
-    r = Ref{__JL_Ctag_150}(x)
-    ptr = Base.unsafe_convert(Ptr{__JL_Ctag_150}, r)
+function Base.getproperty(x::__JL_Ctag_167, f::Symbol)
+    r = Ref{__JL_Ctag_167}(x)
+    ptr = Base.unsafe_convert(Ptr{__JL_Ctag_167}, r)
     fptr = getproperty(ptr, f)
     GC.@preserve r unsafe_load(fptr)
 end
 
-function Base.setproperty!(x::Ptr{__JL_Ctag_150}, f::Symbol, v)
+function Base.setproperty!(x::Ptr{__JL_Ctag_167}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
-function Base.propertynames(x::__JL_Ctag_150, private::Bool = false)
+function Base.propertynames(x::__JL_Ctag_167, private::Bool = false)
     (:raw, :dsp, :h264, :mjpg, if private
             fieldnames(typeof(x))
         else
@@ -9714,7 +9879,7 @@ end
 function Base.getproperty(x::Ptr{spa_video_info}, f::Symbol)
     f === :media_type && return Ptr{UInt32}(x + 0)
     f === :media_subtype && return Ptr{UInt32}(x + 4)
-    f === :info && return Ptr{__JL_Ctag_150}(x + 8)
+    f === :info && return Ptr{__JL_Ctag_167}(x + 8)
     return getfield(x, f)
 end
 

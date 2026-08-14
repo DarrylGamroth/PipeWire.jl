@@ -21,6 +21,7 @@ cd(@__DIR__) do
     spa_include = joinpath(include_root, "spa-0.2")
     headers = [
         joinpath(pipewire_include, "pipewire", "pipewire.h"),
+        joinpath(pipewire_include, "pipewire", "impl-module.h"),
         joinpath(pipewire_include, "pipewire", "extensions", "metadata.h"),
         joinpath(pipewire_include, "pipewire", "extensions", "profiler.h"),
         joinpath(spa_include, "spa", "param", "buffers.h"),

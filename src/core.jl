@@ -26,6 +26,7 @@ mutable struct Context{LoopType<:AbstractPipeWireLoop}
     handle::Ptr{LibPipeWire.pw_context}
     loop::LoopType
     state_lock::ReentrantLock
+    loaded_modules::Dict{String,Ptr{LibPipeWire.pw_impl_module}}
     core_count::Int
     owns_loop::Bool
 end
@@ -47,8 +48,47 @@ function _new_context(loop::AbstractPipeWireLoop, owns_loop::Bool, properties)
         throw(PipeWireError(:pw_context_new, -errno))
     end
 
-    context = Context(handle, loop, ReentrantLock(), 0, owns_loop)
+    context = Context(
+        handle,
+        loop,
+        ReentrantLock(),
+        Dict{String,Ptr{LibPipeWire.pw_impl_module}}(),
+        0,
+        owns_loop,
+    )
     finalizer(close, context)
+    return context
+end
+
+function _ensure_context_module!(context::Context, name::AbstractString)
+    module_name = _validate_c_string(String(name), "PipeWire module name")
+    return lock(context.state_lock) do
+        handle = _require_open(context)
+        get!(context.loaded_modules, module_name) do
+            module_handle = GC.@preserve module_name LibPipeWire.pw_context_load_module(
+                handle,
+                module_name,
+                C_NULL,
+                C_NULL,
+            )
+            module_handle == C_NULL && throw(
+                PipeWireError(:pw_context_load_module, -Base.Libc.errno()),
+            )
+            return module_handle
+        end
+    end
+end
+
+"""
+    enable_profiler!(context::Context) -> Context
+
+Load the context-side profiler extension and return `context`. Do this before
+connecting an embedded (`self=true`) core so that its registry advertises a
+[`Profiler`](@ref) global. Binding a profiler from an external daemon loads the
+client-side extension automatically.
+"""
+function enable_profiler!(context::Context)
+    _ensure_context_module!(context, "libpipewire-module-profiler")
     return context
 end
 

@@ -358,6 +358,21 @@ that do not yet have a managed wrapper. `SPA.Pointer` is intentionally borrowed
 and does not keep its pointee alive; preserve the owner for every native use of
 the pointer POD.
 
+## Runnable clients
+
+The repository includes complete clients that use reusable, concretely typed
+callback state:
+
+- [`examples/audio_sine.jl`](examples/audio_sine.jl) plays a generated stereo
+  Float32 sine wave.
+- [`examples/video_capture.jl`](examples/video_capture.jl) negotiates RGBx
+  camera capture, parses the resulting `VideoInfoRaw`, and consumes buffers.
+
+Run either from the package checkout with `julia --project=.`. Both continue
+until interrupted with Ctrl-C; pass `--help` for their arguments. Video capture
+may require selecting a target global ID or granting camera access through the
+desktop portal/session manager.
+
 `PipeWire` and `PipeWire_jll` are published in
 [`DarrylGamrothRegistry`](https://github.com/DarrylGamroth/PackageRegistry).
 Add the registry once, then install the package by name:

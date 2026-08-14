@@ -1,2 +1,9 @@
 ignore:
   - "src/generated/**"
+
+coverage:
+  status:
+    project:
+      default:
+        target: 80%
+        threshold: 0%

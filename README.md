@@ -246,6 +246,9 @@ the native names without the redundant `SPA_` prefix: `SPA.PARAM_PROPS`,
 used by the managed parameter builders follow the same convention. These
 values can be passed directly to `SPA.Object`, `SPA.Parameter`, `SPA.Property`,
 `subscribe_params!`, and related APIs, and compared directly with callback IDs.
+Buffer validity flags are available as `SPA.META_HEADER_FLAG_CORRUPTED`,
+`SPA.META_HEADER_FLAG_GAP`, `SPA.CHUNK_FLAG_CORRUPTED`, and
+`SPA.CHUNK_FLAG_EMPTY`.
 
 ```julia
 volume = SPA.Parameter(
@@ -314,9 +317,10 @@ managed methods.
 
 `StreamBuffer` exposes all SPA data planes and metadata without hiding their
 native lifetime. Header, crop, damage, bitmap, cursor, busy, transform, and
-explicit-sync timeline accessors return owned snapshots. File-backed `MemFd`
-and explicitly mappable `DmaBuf` planes can be scoped with `map_data` and
-`close`; DMA-BUF synchronization remains the application's responsibility.
+explicit-sync timeline accessors return owned snapshots. `chunk_info` returns
+an owned `BufferChunk` snapshot for stream and filter data planes. File-backed
+`MemFd` and explicitly mappable `DmaBuf` planes can be scoped with `map_data`
+and `close`; DMA-BUF synchronization remains the application's responsibility.
 With `STREAM_ALLOC_BUFFERS`, call `allocate_buffer!` from `on_buffer_added` to
 install Julia-owned `MemPtr` planes. The stream roots those allocations until
 PipeWire removes the corresponding native buffer.

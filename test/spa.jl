@@ -17,6 +17,8 @@ end
         SPA.PROP_VOLUME,
         SPA.DATA_MEM_PTR,
         SPA.META_HEADER,
+        SPA.META_HEADER_FLAG_CORRUPTED,
+        SPA.META_HEADER_FLAG_GAP,
         SPA.META_TRANSFORM_90,
         SPA.IO_BUFFERS,
         SPA.BUFFERS_COUNT,
@@ -37,6 +39,26 @@ end
     @test SPA.PARAM_PROPS == UInt32(2)
     @test SPA.PARAM_FORMAT == UInt32(4)
     @test SPA.OBJECT_PROPS == UInt32(0x0004_0002)
+    @test SPA.META_HEADER_FLAG_DISCONT == UInt32(1 << 0)
+    @test SPA.META_HEADER_FLAG_CORRUPTED == UInt32(1 << 1)
+    @test SPA.META_HEADER_FLAG_MARKER == UInt32(1 << 2)
+    @test SPA.META_HEADER_FLAG_HEADER == UInt32(1 << 3)
+    @test SPA.META_HEADER_FLAG_GAP == UInt32(1 << 4)
+    @test SPA.META_HEADER_FLAG_DELTA_UNIT == UInt32(1 << 5)
+    @test SPA.CHUNK_FLAG_NONE === Int32(0)
+    @test SPA.CHUNK_FLAG_CORRUPTED === Int32(1 << 0)
+    @test SPA.CHUNK_FLAG_EMPTY === Int32(1 << 1)
+
+    header = BufferHeader(
+        SPA.META_HEADER_FLAG_CORRUPTED | SPA.META_HEADER_FLAG_GAP,
+        0,
+        0,
+        0,
+        0,
+    )
+    @test !iszero(header.flags & SPA.META_HEADER_FLAG_CORRUPTED)
+    chunk = BufferChunk(0, 1, 0, SPA.CHUNK_FLAG_CORRUPTED)
+    @test !iszero(chunk.flags & SPA.CHUNK_FLAG_CORRUPTED)
 
     volume = @inferred SPA.Property(SPA.PROP_VOLUME, 0.5f0)
     parameter = @inferred SPA.Parameter(SPA.OBJECT_PROPS, SPA.PARAM_PROPS, volume)

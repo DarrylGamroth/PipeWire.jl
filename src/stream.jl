@@ -800,6 +800,14 @@ struct StreamMetadata
     index::Int
 end
 
+"An owned snapshot of a SPA buffer chunk."
+struct BufferChunk
+    offset::UInt32
+    size::UInt32
+    stride::Int32
+    flags::Int32
+end
+
 "An owned snapshot of SPA header metadata."
 struct BufferHeader
     flags::UInt32
@@ -1397,6 +1405,12 @@ function _chunk(data::StreamData)
     native.chunk == C_NULL &&
         throw(InvalidStateException("the PipeWire data plane has no chunk", :no_chunk))
     return native, native.chunk, unsafe_load(native.chunk)
+end
+
+"Return an owned snapshot of the current chunk in a stream data plane."
+function chunk_info(data::StreamData)
+    _, _, chunk = _chunk(data)
+    return BufferChunk(chunk.offset, chunk.size, chunk.stride, chunk.flags)
 end
 
 "Return a borrowed byte view of the current chunk in a stream data plane."

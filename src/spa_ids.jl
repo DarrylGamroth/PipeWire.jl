@@ -256,6 +256,19 @@ end
     META_SYNC_TIMELINE = LibPipeWire.SPA_META_SyncTimeline
 end
 
+# Flags stored in `spa_meta_header.flags`.
+const META_HEADER_FLAG_DISCONT = UInt32(1 << 0)
+const META_HEADER_FLAG_CORRUPTED = UInt32(1 << 1)
+const META_HEADER_FLAG_MARKER = UInt32(1 << 2)
+const META_HEADER_FLAG_HEADER = UInt32(1 << 3)
+const META_HEADER_FLAG_GAP = UInt32(1 << 4)
+const META_HEADER_FLAG_DELTA_UNIT = UInt32(1 << 5)
+
+# Flags stored in `spa_chunk.flags`.
+const CHUNK_FLAG_NONE = Int32(0)
+const CHUNK_FLAG_CORRUPTED = Int32(1 << 0)
+const CHUNK_FLAG_EMPTY = Int32(1 << 1)
+
 # Video transformations stored in SPA buffer metadata.
 @_spa_ids begin
     META_TRANSFORM_NONE = LibPipeWire.SPA_META_TRANSFORMATION_None

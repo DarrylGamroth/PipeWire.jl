@@ -249,7 +249,14 @@ end
 
 @testset "filter buffer data" begin
     storage = collect(UInt8(1):UInt8(16))
-    chunk = Ref(PipeWire.LibPipeWire.spa_chunk(UInt32(2), UInt32(4), Int32(2), Int32(0)))
+    chunk = Ref(
+        PipeWire.LibPipeWire.spa_chunk(
+            UInt32(2),
+            UInt32(4),
+            Int32(2),
+            SPA.CHUNK_FLAG_CORRUPTED,
+        ),
+    )
     native_data = Ref(
         PipeWire.LibPipeWire.spa_data(
             PipeWire.LibPipeWire.SPA_DATA_MemPtr,
@@ -288,8 +295,15 @@ end
         @test capacity(data) == 16
         @test data_pointer(data) == pointer(storage)
         @test bytes(data) == UInt8[3, 4, 5, 6]
+        snapshot = @inferred chunk_info(data)
+        @test snapshot == BufferChunk(2, 4, 2, SPA.CHUNK_FLAG_CORRUPTED)
+        @test !iszero(snapshot.flags & SPA.CHUNK_FLAG_CORRUPTED)
+        chunk_info(data)
+        @test @allocated(chunk_info(data)) == 0
         @test writable_bytes(data) == storage
         @test set_chunk!(data; offset=1, size=8, stride=4) === data
+        @test chunk_info(data) == BufferChunk(1, 8, 4, SPA.CHUNK_FLAG_CORRUPTED)
+        @test snapshot == BufferChunk(2, 4, 2, SPA.CHUNK_FLAG_CORRUPTED)
         @test chunk[].offset == 1
         @test chunk[].size == 8
         @test chunk[].stride == 4

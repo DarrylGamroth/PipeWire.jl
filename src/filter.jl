@@ -836,6 +836,12 @@ function _chunk(data::FilterData)
     return native, native.chunk, unsafe_load(native.chunk)
 end
 
+"Return an owned snapshot of the current chunk in a filter data plane."
+function chunk_info(data::FilterData)
+    _, _, chunk = _chunk(data)
+    return BufferChunk(chunk.offset, chunk.size, chunk.stride, chunk.flags)
+end
+
 function bytes(data::FilterData)
     native, _, chunk = _chunk(data)
     pointer = data_pointer(data)

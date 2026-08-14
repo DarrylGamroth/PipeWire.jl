@@ -2,6 +2,7 @@ using PipeWire
 using Test
 
 include("aqua.jl")
+include("current_info.jl")
 
 struct CountProcess
     count::Base.RefValue{Int}

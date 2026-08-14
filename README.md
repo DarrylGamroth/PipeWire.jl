@@ -56,6 +56,48 @@ with_registry() do registry
 end
 ```
 
+`track_info!` adds an opt-in `InfoTracker` for nodes, ports, devices, and
+links. Raw `on_info` callbacks still receive PipeWire protocol deltas; the
+tracker separately merges those deltas by their change masks. `current_info`
+returns the most recently known complete snapshot, whose `change_mask`
+describes every field observed so far. The tracker state and listener types are
+concrete, and a warmed `current_info` read allocates zero bytes. The `params`
+field contains `ParamInfo` descriptors; parameter POD values continue to arrive
+through `on_param`. Closing the tracker detaches only its listener.
+
+```julia
+with_registry() do registry
+    roundtrip(registry)
+    node_global = first(find_globals(
+        registry;
+        interface="PipeWire:Interface:Node",
+    ))
+    node = bind(registry, node_global, Node)
+    tracker = track_info!(node)
+    try
+        roundtrip(node)
+        has_current_info(tracker) || error("node did not emit info")
+        info = current_info(tracker)
+        println(info.state, " ", info.properties)
+    finally
+        close(tracker)
+        close(node)
+    end
+end
+```
+
+A tracker can also be attached to a proxy returned by `create_object`, but it
+can only retain events emitted on that proxy. Server-computed link properties
+such as `link.feedback` become observable on the registered Link global. After
+the created link has a `bound_id`, find that global in its registry, bind it as
+a `Link`, and track the registry-bound proxy. `LINK_STATE_ACTIVE` can arrive
+before the later properties event, so synchronize again and wait until the
+tracker's accumulated mask satisfies
+`info.change_mask & LINK_CHANGE_PROPERTIES != 0` before reading the key. The
+corresponding `NODE_CHANGE_*`, `PORT_CHANGE_*`, `DEVICE_CHANGE_*`, and
+`LINK_CHANGE_*` masks are public; client code does not need `LibPipeWire` for
+these checks.
+
 The managed `Profiler` proxy delivers each sample as an owned `Pod`. PipeWire's
 profiler protocol is supplied by a context module; binding a profiler from an
 external daemon loads that client-side module automatically. For an embedded

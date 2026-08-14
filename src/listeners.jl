@@ -19,6 +19,30 @@ mutable struct ManagedListener{Owner,Events,Callbacks}
     active::Bool
 end
 
+mutable struct _CurrentInfoState{Info}
+    lock::ReentrantLock
+    value::Base.RefValue{Info}
+    available::Bool
+end
+
+struct _CurrentInfoCallback{Object,Info}
+    state::_CurrentInfoState{Info}
+end
+
+"""
+    InfoTracker
+
+An opt-in maintained current-info snapshot for a managed [`Node`](@ref),
+[`Port`](@ref), [`Device`](@ref), or [`Link`](@ref). Construct one with
+[`track_info!`](@ref), test readiness with [`has_current_info`](@ref), read it
+with [`current_info`](@ref), and close it to detach its independently owned
+listener.
+"""
+struct InfoTracker{Info,Listener}
+    state::_CurrentInfoState{Info}
+    listener::Listener
+end
+
 function _new_listener(owner::Owner, ::Type{Events}, callbacks::Callbacks) where {Owner,Events,Callbacks}
     return ManagedListener(
         owner,
@@ -944,6 +968,101 @@ for (name, event_type, events_function, native_type, add_function, operation) in
             $(QuoteNode(operation)),
         )
     end
+end
+
+
+function (callback::_CurrentInfoCallback{Object,Info})(
+    ::Object,
+    update::Info,
+) where {Object,Info}
+    state = callback.state
+    lock(state.lock)
+    try
+        if state.available
+            state.value[] = _merge_info(state.value[], update)
+        else
+            state.value[] = _merge_info(nothing, update)
+        end
+        state.available = true
+    finally
+        unlock(state.lock)
+    end
+    return nothing
+end
+
+
+function _track_info!(object::Object, ::Type{Info}) where {Object,Info}
+    state = _CurrentInfoState{Info}(ReentrantLock(), Ref{Info}(), false)
+    listener = add_listener!(object; on_info=_CurrentInfoCallback{Object,Info}(state))
+    return InfoTracker(state, listener)
+end
+
+
+"""
+    track_info!(object) -> InfoTracker
+
+Attach an independent listener that maintains current copied object info for a
+managed `Node`, `Port`, `Device`, or `Link`. Raw `on_info` callbacks are
+unchanged and continue to receive protocol deltas.
+
+The tracker merges fields according to each event's PipeWire change mask.
+Its accumulated `change_mask` records all fields observed so far. Keep the
+tracker alive while updates are wanted and call `close(tracker)` to detach it.
+"""
+track_info!(object::Node) = _track_info!(object, NodeInfo)
+track_info!(object::Port) = _track_info!(object, PortInfo)
+track_info!(object::Device) = _track_info!(object, DeviceInfo)
+track_info!(object::Link) = _track_info!(object, LinkInfo)
+
+
+"""
+    has_current_info(tracker::InfoTracker) -> Bool
+
+Return whether the tracker has received its first info event.
+"""
+function has_current_info(tracker::InfoTracker)
+    state = tracker.state
+    lock(state.lock)
+    try
+        return state.available
+    finally
+        unlock(state.lock)
+    end
+end
+
+
+"""
+    current_info(tracker::InfoTracker) -> Info
+
+Return the most recently known complete copied info. Throw an
+`InvalidStateException` if no info event has arrived; use
+[`has_current_info`](@ref) to test readiness. The returned value remains valid
+after later events because the tracker replaces rather than mutates its stored
+dictionaries, parameter vectors, and format PODs. Treat those owned containers
+as read-only.
+"""
+function current_info(tracker::InfoTracker{Info})::Info where {Info}
+    state = tracker.state
+    lock(state.lock)
+    try
+        state.available || throw(
+            InvalidStateException(
+                "the PipeWire info tracker has not received an info event",
+                :unavailable,
+            ),
+        )
+        return state.value[]
+    finally
+        unlock(state.lock)
+    end
+end
+
+
+Base.isopen(tracker::InfoTracker) = isopen(tracker.listener)
+
+function Base.close(tracker::InfoTracker)
+    close(tracker.listener)
+    return nothing
 end
 
 

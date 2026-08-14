@@ -315,12 +315,15 @@ its callback. Stream properties, parameters, controls, timing, error state,
 adaptive rate, graph-driving state, and SPA event emission have corresponding
 managed methods.
 
-`StreamBuffer` exposes all SPA data planes and metadata without hiding their
-native lifetime. Header, crop, damage, bitmap, cursor, busy, transform, and
-explicit-sync timeline accessors return owned snapshots. `chunk_info` returns
-an owned `BufferChunk` snapshot for stream and filter data planes. File-backed
+`StreamBuffer` and `FilterBuffer` expose the same SPA data-plane and metadata
+operations without hiding their native lifetime. Header, crop, damage, bitmap,
+cursor, busy, transform, and explicit-sync timeline accessors return owned
+snapshots. `chunk_info` returns an owned `BufferChunk` snapshot. File-backed
 `MemFd` and explicitly mappable `DmaBuf` planes can be scoped with `map_data`
 and `close`; DMA-BUF synchronization remains the application's responsibility.
+Data access masks are public as `SPA.DATA_FLAG_READABLE`,
+`SPA.DATA_FLAG_WRITABLE`, `SPA.DATA_FLAG_DYNAMIC`,
+`SPA.DATA_FLAG_READWRITE`, and `SPA.DATA_FLAG_MAPPABLE`.
 With `STREAM_ALLOC_BUFFERS`, call `allocate_buffer!` from `on_buffer_added` to
 install Julia-owned `MemPtr` planes. The stream roots those allocations until
 PipeWire removes the corresponding native buffer.
@@ -382,7 +385,10 @@ input and output ports, negotiate each port independently, and process their
 buffers from one callback. Port application data is stored in the concrete
 `FilterPort` type. The warmed callback dispatch itself allocates zero bytes
 when its callable does not allocate. As with streams, Julia callbacks must not
-use `RT_PROCESS`.
+use `RT_PROCESS`. A port created with `FILTER_PORT_ALLOC_BUFFERS` can call
+`allocate_buffer!(port, buffer, sizes)` from `on_buffer_added`; its filter owns
+that Julia storage until PipeWire reports the buffer removed. Filters can also
+send managed `SPA.Event` values with `emit_event!`.
 
 ```julia
 context = Context()

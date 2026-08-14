@@ -58,7 +58,7 @@ end
 Create a reusable filter-buffer wrapper. A successfully dequeued buffer must
 be returned with [`queue_buffer!`](@ref) before this wrapper can be reused.
 """
-mutable struct FilterBuffer
+mutable struct FilterBuffer <: AbstractPipeWireBuffer
     handle::Ptr{LibPipeWire.pw_buffer}
     port_data::Ptr{Cvoid}
 end
@@ -69,10 +69,13 @@ FilterBuffer() = FilterBuffer(
 )
 
 "A borrowed data plane belonging to a [`FilterBuffer`](@ref)."
-struct FilterData
+struct FilterData <: AbstractPipeWireData
     buffer::FilterBuffer
     index::Int
 end
+
+const FilterMetadata = BufferMetadata{FilterBuffer}
+const MappedFilterData = MappedBufferData{FilterData}
 
 """
     Filter(core, name; properties=nothing, callbacks...)
@@ -100,6 +103,7 @@ mutable struct Filter{CoreType<:CoreConnection,Callbacks}
     callbacks::Callbacks
     callback_error::Base.RefValue{Any}
     ports::Vector{FilterPort}
+    buffer_owners::Dict{Ptr{LibPipeWire.pw_buffer},Vector{Vector{UInt8}}}
     callbacks_active::Bool
     connected::Bool
 end
@@ -271,12 +275,18 @@ function _filter_buffer_removed(
     port_data::Ptr{Cvoid},
     buffer::Ptr{LibPipeWire.pw_buffer},
 )::Cvoid
-    _invoke_filter_callback(
-        filter,
-        Val(:on_buffer_removed),
-        _filter_port(filter, port_data),
-        buffer,
-    )
+    try
+        _invoke_filter_callback(
+            filter,
+            Val(:on_buffer_removed),
+            _filter_port(filter, port_data),
+            buffer,
+        )
+    finally
+        lock(filter.state_lock) do
+            pop!(filter.buffer_owners, buffer, nothing)
+        end
+    end
     return nothing
 end
 
@@ -417,6 +427,7 @@ function Filter(
         callbacks,
         Ref{Any}(nothing),
         FilterPort[],
+        Dict{Ptr{LibPipeWire.pw_buffer},Vector{Vector{UInt8}}}(),
         true,
         false,
     )
@@ -484,6 +495,7 @@ function Base.close(filter::Filter)
         port.handle = C_NULL
     end
     empty!(filter.ports)
+    empty!(filter.buffer_owners)
     _release_filter(filter.core)
     return nothing
 end
@@ -710,6 +722,24 @@ function trigger_process!(filter::Filter)
     return filter
 end
 
+"Emit an owned SPA event POD from `filter` and return it."
+function emit_event!(filter::Filter, event::Pod)
+    _check_callback_error(filter)
+    object = pod_value(SPA.Object, event)
+    LibPipeWire.SPA_TYPE_EVENT_START <= object.type < LibPipeWire._SPA_TYPE_EVENT_LAST ||
+        throw(ArgumentError("the POD is not an SPA event object"))
+    result = GC.@preserve event lock(filter.state_lock) do
+        LibPipeWire.pw_filter_emit_event(
+            _require_open(filter),
+            Ptr{LibPipeWire.spa_event}(_pod_pointer(event)),
+        )
+    end
+    _check_result(:pw_filter_emit_event, result)
+    return filter
+end
+
+emit_event!(filter::Filter, event::SPA.Event) = emit_event!(filter, Pod(event))
+
 """
     set_error!(filter, result, message)
 
@@ -804,6 +834,30 @@ function _require_available(buffer::FilterBuffer)
     return buffer.handle
 end
 
+"""
+    allocate_buffer!(port, buffer, sizes; flags=SPA.DATA_FLAG_READWRITE)
+
+Allocate Julia-owned `MemPtr` storage for every native data plane in `buffer`.
+Call this from `on_buffer_added` for a port created with
+[`FILTER_PORT_ALLOC_BUFFERS`](@ref). The filter roots the storage until the
+native buffer is removed. `buffer` is the raw pointer supplied to that callback.
+"""
+function allocate_buffer!(
+    port::FilterPort,
+    buffer::Ptr{LibPipeWire.pw_buffer},
+    sizes;
+    flags::Integer=SPA.DATA_FLAG_READWRITE,
+)
+    return _allocate_buffer!(port.filter, port, buffer, sizes, flags)
+end
+
+allocate_buffer!(
+    port::FilterPort,
+    buffer::Ptr{LibPipeWire.pw_buffer},
+    size::Integer;
+    flags::Integer=SPA.DATA_FLAG_READWRITE,
+) = allocate_buffer!(port, buffer, (size,); flags)
+
 function buffer_data(buffer::FilterBuffer, index::Integer=1)
     native_buffer = unsafe_load(_require_available(buffer)).buffer
     native_buffer == C_NULL && throw(
@@ -818,52 +872,6 @@ function _native_data(data::FilterData)
     native_buffer = unsafe_load(_require_available(data.buffer)).buffer
     buffer = unsafe_load(native_buffer)
     return unsafe_load(buffer.datas, data.index)
-end
-
-capacity(data::FilterData) = Int(_native_data(data).maxsize)
-
-function data_pointer(data::FilterData)
-    native = _native_data(data)
-    native.data == C_NULL &&
-        throw(InvalidStateException("the PipeWire data plane is not mapped", :unmapped))
-    return Ptr{UInt8}(native.data)
-end
-
-function _chunk(data::FilterData)
-    native = _native_data(data)
-    native.chunk == C_NULL &&
-        throw(InvalidStateException("the PipeWire data plane has no chunk", :no_chunk))
-    return native, native.chunk, unsafe_load(native.chunk)
-end
-
-"Return an owned snapshot of the current chunk in a filter data plane."
-function chunk_info(data::FilterData)
-    _, _, chunk = _chunk(data)
-    return BufferChunk(chunk.offset, chunk.size, chunk.stride, chunk.flags)
-end
-
-function bytes(data::FilterData)
-    native, _, chunk = _chunk(data)
-    pointer = data_pointer(data)
-    offset = Int(chunk.offset % max(native.maxsize, UInt32(1)))
-    size = min(Int(chunk.size), Int(native.maxsize) - offset)
-    return unsafe_wrap(Vector{UInt8}, pointer + offset, size; own=false)
-end
-
-function writable_bytes(data::FilterData)
-    native = _native_data(data)
-    return unsafe_wrap(Vector{UInt8}, data_pointer(data), Int(native.maxsize); own=false)
-end
-
-function set_chunk!(data::FilterData; offset::Integer=0, size::Integer, stride::Integer=0)
-    native, pointer, chunk = _chunk(data)
-    0 <= offset <= native.maxsize || throw(ArgumentError("chunk offset exceeds data capacity"))
-    0 <= size <= native.maxsize - offset || throw(ArgumentError("chunk size exceeds data capacity"))
-    unsafe_store!(
-        pointer,
-        LibPipeWire.spa_chunk(UInt32(offset), UInt32(size), Int32(stride), chunk.flags),
-    )
-    return data
 end
 
 function run!(filter::Filter)

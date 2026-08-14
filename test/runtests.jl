@@ -589,6 +589,7 @@ end
 include("loop.jl")
 include("spa.jl")
 include("filter.jl")
+include("listeners.jl")
 @testset "managed stream" begin
     context = Context()
     connection_properties = Properties(Dict("application.name" => "PipeWire.jl tests"))

@@ -92,6 +92,33 @@ finally
 end
 ```
 
+Additional callbacks can be attached without rebuilding an owner. Each
+`ManagedListener` stores its callback tuple in concrete type parameters and is
+independently removable with `close`. Keep the listener alive for as long as
+its callbacks are wanted. Register and remove listeners on the PipeWire loop
+thread, or while holding a `ThreadLoop` lock.
+
+```julia
+with_registry() do registry
+    listener = add_listener!(
+        registry;
+        on_global_added=(registry, global_object) ->
+            println("added ", global_object.id, " ", global_object.type),
+        on_global_removed=(registry, id) -> println("removed ", id),
+    )
+    try
+        roundtrip(registry)
+    finally
+        close(listener) # registry remains open
+    end
+end
+```
+
+The same pattern is available for cores, generic proxies, every typed proxy,
+streams, and filters. Stream and filter listeners can observe the complete
+managed event surface, including process and destroy notifications. A warmed
+process listener remains allocation-free when its callback does not allocate.
+
 ## SPA POD values
 
 Scalar SPA PODs have owned Julia representations. Use the typed `pod_value`

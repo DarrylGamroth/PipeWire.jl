@@ -34,6 +34,7 @@ export CoreConnection,
     SignalSource,
     TimerSource,
     MainLoop,
+    ManagedListener,
     MappedStreamData,
     Metadata,
     ModuleInfo,
@@ -86,6 +87,7 @@ export CoreConnection,
     SPA,
     Video,
     add_port!,
+    add_listener!,
     allocate_buffer!,
     audio_format,
     audio_format_param,
@@ -217,6 +219,7 @@ include("spa.jl")
 include("objects.jl")
 include("stream.jl")
 include("filter.jl")
+include("listeners.jl")
 
 """
     library_version() -> VersionNumber

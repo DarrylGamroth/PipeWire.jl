@@ -861,6 +861,9 @@ include("filter.jl")
 
     mktemp() do _, io
         truncate(io, 4096)
+        raw_fd = Base.fd(io)
+        file_descriptor =
+            raw_fd isa Integer ? Cint(raw_fd) : reinterpret(Cint, raw_fd)
         file_chunk = Ref(
             PipeWire.LibPipeWire.spa_chunk(UInt32(0), UInt32(0), Int32(0), Int32(0)),
         )
@@ -868,7 +871,7 @@ include("filter.jl")
             PipeWire.LibPipeWire.spa_data(
                 PipeWire.LibPipeWire.SPA_DATA_MemFd,
                 UInt32(3),
-                Int64(Cint(Base.fd(io))),
+                Int64(file_descriptor),
                 UInt32(0),
                 UInt32(4096),
                 C_NULL,

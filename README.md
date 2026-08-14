@@ -323,7 +323,8 @@ Pkg.Registry.add(Pkg.RegistrySpec(url="https://github.com/DarrylGamroth/PackageR
 Pkg.add("PipeWire")
 ```
 
-The current `PipeWire_jll` artifact supports x86_64 Linux with glibc.
+`PipeWire_jll` supports glibc-based Linux on x86_64, i686, AArch64, ARMv6,
+ARMv7, PowerPC64LE, and RISC-V 64.
 
 ## Regenerating the C bindings
 

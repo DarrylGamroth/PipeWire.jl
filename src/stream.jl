@@ -557,14 +557,12 @@ function set_control!(stream::Stream, id::Integer, values)
     length(native_values) <= typemax(UInt32) ||
         throw(ArgumentError("stream control has too many values"))
     result = GC.@preserve native_values lock(stream.state_lock) do
-        ccall(
-            (:pw_stream_set_control, LibPipeWire.PipeWire_jll.libpipewire),
-            Cint,
-            (Ptr{LibPipeWire.pw_stream}, UInt32, UInt32, Ptr{Cfloat}),
+        LibPipeWire.pw_stream_set_control(
             _require_open(stream),
             control_id,
             UInt32(length(native_values)),
             isempty(native_values) ? C_NULL : pointer(native_values),
+            UInt32(0),
         )
     end
     _check_result(:pw_stream_set_control, result)
@@ -667,18 +665,14 @@ function set_error!(stream::Stream, result::Integer, message::AbstractString)
         throw(ArgumentError("a PipeWire stream error result must be a negative Cint"))
     text = _validate_c_string(String(message), "stream error message")
     format = "%s"
-    native_result = GC.@preserve text format lock(stream.state_lock) do
-        ccall(
-            (:pw_stream_set_error, LibPipeWire.PipeWire_jll.libpipewire),
-            Cint,
-            (Ptr{LibPipeWire.pw_stream}, Cint, Cstring, Cstring),
+    GC.@preserve text format lock(stream.state_lock) do
+        LibPipeWire.pw_stream_set_error(
             _require_open(stream),
             Cint(result),
             pointer(format),
             pointer(text),
         )
     end
-    _check_result(:pw_stream_set_error, native_result)
     return stream
 end
 

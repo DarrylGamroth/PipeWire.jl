@@ -722,10 +722,7 @@ function set_error!(filter::Filter, result::Integer, message::AbstractString)
     text = _validate_c_string(String(message), "filter error message")
     format = "%s"
     GC.@preserve text format lock(filter.state_lock) do
-        ccall(
-            (:pw_filter_set_error, LibPipeWire.PipeWire_jll.libpipewire),
-            Cint,
-            (Ptr{LibPipeWire.pw_filter}, Cint, Cstring, Cstring),
+        LibPipeWire.pw_filter_set_error(
             _require_open(filter),
             Cint(result),
             pointer(format),

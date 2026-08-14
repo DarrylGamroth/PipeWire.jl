@@ -848,6 +848,8 @@ include("examples.jl")
     @test set_active!(stream) === stream
     @test flush!(stream) === stream
     @test trigger_process!(stream) === stream
+    @test set_control!(stream, SPA.PROP_VOLUME, 0.25) === stream
+    @test set_control!(stream, SPA.PROP_CHANNEL_VOLUMES, Float32[0.25, 0.5]) === stream
     disconnect!(stream)
 
     storage = collect(UInt8(1):UInt8(16))
@@ -1047,6 +1049,17 @@ include("examples.jl")
             close(mapping)
         end
     end
+
+    @test set_error!(stream, -5, "stream test error") === stream
+    stream_error = try
+        stream_state(stream)
+        nothing
+    catch error
+        error
+    end
+    @test stream_error isa PipeWireError
+    @test stream_error.code == -5
+    @test stream_error.detail == "stream test error"
 
     close(stream)
     @test !isopen(stream)

@@ -11,7 +11,8 @@ The package is being built in layers:
   [Clang.jl](https://github.com/JuliaInterop/Clang.jl).
 - owning Julia types provide deterministic cleanup and an idiomatic public API.
 
-The managed API currently includes main loops, contexts, core connections,
+The managed API currently includes main and threaded loops, owned event, timer,
+idle, I/O, and signal sources, typed loop channels, contexts, core connections,
 registry-global snapshots and binding, generic proxies, native-backed
 properties, typed node/port/device/link/metadata/factory/module/client proxies,
 typed core protocol events and methods, streams, multi-port filters, owned SPA
@@ -121,6 +122,42 @@ format = video_format(
 
 `with_registry` connects to the default PipeWire daemon. For an embedded
 in-process core, use `with_registry(self=true)`.
+
+## Threaded loop and task bridge
+
+`ThreadLoop` runs PipeWire on a native thread and can back the same managed
+`Context`, `CoreConnection`, and `Registry` types as `MainLoop`. `roundtrip`
+starts and stops a dormant thread loop automatically. For a long-lived client,
+start it explicitly and stop it before closing its children.
+
+`LoopChannel{T}` is a bounded, typed bridge from Julia tasks into that loop.
+Its callback runs in the PipeWire loop context, so it must remain short and
+nonblocking. Loop-source and managed-object C trampolines are specialized on
+their exact concrete Julia owner type and pass it as `Ref{T}`.
+
+```julia
+loop = ThreadLoop("Julia PipeWire client")
+context = Context(loop)
+core = CoreConnection(context)
+commands = LoopChannel{Symbol}(loop, (source, command) -> println(command))
+
+try
+    start!(loop)
+    put!(commands, :refresh)
+    # Run the rest of the application here.
+finally
+    stop!(loop)
+    close(commands)
+    close(core)
+    close(context)
+    close(loop)
+end
+```
+
+The lower-level `EventSource`, `TimerSource`, `IdleSource`, `IOSource`, and
+`SignalSource` types provide deterministic source ownership. Close every
+source before closing its parent loop. `LOOP_IO_IN`, `LOOP_IO_OUT`,
+`LOOP_IO_ERR`, and `LOOP_IO_HUP` are the portable I/O masks.
 
 ## Raw-audio stream
 

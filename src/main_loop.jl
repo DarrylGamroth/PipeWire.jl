@@ -28,17 +28,22 @@ function _check_result(operation::Symbol, result::Cint)
     return result
 end
 
+abstract type AbstractPipeWireLoop end
+
 """
     MainLoop()
 
 Create an owning PipeWire main loop. Call [`close`](@ref) when it is no longer
 needed, or use [`with_main_loop`](@ref) for scoped ownership.
 """
-mutable struct MainLoop
+
+mutable struct MainLoop <: AbstractPipeWireLoop
     handle::Ptr{LibPipeWire.pw_main_loop}
     state_lock::ReentrantLock
     running::Bool
     context_count::Int
+    source_count::Int
+    source_roots::IdDict{Any,Nothing}
 
     function MainLoop()
         LibPipeWire.pw_init(C_NULL, C_NULL)
@@ -49,7 +54,7 @@ mutable struct MainLoop
             throw(PipeWireError(:pw_main_loop_new, -errno))
         end
 
-        loop = new(handle, ReentrantLock(), false, 0)
+        loop = new(handle, ReentrantLock(), false, 0, 0, IdDict{Any,Nothing}())
         finalizer(close, loop)
         return loop
     end
@@ -94,12 +99,69 @@ function Base.close(loop::MainLoop)
                 :open_contexts,
             ),
         )
+        loop.source_count == 0 || throw(
+            InvalidStateException(
+                "cannot close a PipeWire main loop while loop sources are open",
+                :open_sources,
+            ),
+        )
 
         handle = loop.handle
         loop.handle = Ptr{LibPipeWire.pw_main_loop}(C_NULL)
         LibPipeWire.pw_main_loop_destroy(handle)
         LibPipeWire.pw_deinit()
         return nothing
+    end
+end
+
+function _retain_source(loop::MainLoop)
+    return lock(loop.state_lock) do
+        handle = _require_open(loop)
+        loop.running && throw(
+            InvalidStateException(
+                "create loop sources before running a PipeWire main loop",
+                :running,
+            ),
+        )
+        loop.source_count += 1
+        return LibPipeWire.pw_main_loop_get_loop(handle)
+    end
+end
+
+function _register_source(loop::MainLoop, source)
+    return lock(loop.state_lock) do
+        loop.source_roots[source] = nothing
+        return nothing
+    end
+end
+
+function _cancel_source(loop::MainLoop)
+    return lock(loop.state_lock) do
+        loop.source_count -= 1
+        @assert loop.source_count >= 0
+        return nothing
+    end
+end
+
+function _release_source(loop::MainLoop, source)
+    return lock(loop.state_lock) do
+        delete!(loop.source_roots, source)
+        loop.source_count -= 1
+        @assert loop.source_count >= 0
+        return nothing
+    end
+end
+
+function _with_loop_lock(f, loop::MainLoop)
+    return lock(loop.state_lock) do
+        loop.running && throw(
+            InvalidStateException(
+                "modify loop sources only while a PipeWire main loop is stopped",
+                :running,
+            ),
+        )
+        handle = _require_open(loop)
+        return f(LibPipeWire.pw_main_loop_get_loop(handle))
     end
 end
 

@@ -500,6 +500,7 @@ end
     @test isempty(info.params)
 end
 
+include("loop.jl")
 include("spa.jl")
 include("filter.jl")
 @testset "managed stream" begin

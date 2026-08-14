@@ -222,27 +222,6 @@ function Base.bind(
     return _new_proxy(handle, registry, interface_name, UInt32(version), callbacks)
 end
 
-function _with_properties_dict(call, properties::Properties)
-    return lock(properties.state_lock) do
-        native = unsafe_load(_require_open(properties))
-        dictionary = Ref(native.dict)
-        GC.@preserve dictionary call(
-            Base.unsafe_convert(Ptr{LibPipeWire.spa_dict}, dictionary),
-        )
-    end
-end
-
-_with_properties_dict(call, ::Nothing) = call(Ptr{LibPipeWire.spa_dict}(C_NULL))
-
-function _with_properties_dict(call, entries)
-    properties = Properties(entries)
-    try
-        return _with_properties_dict(call, properties)
-    finally
-        close(properties)
-    end
-end
-
 """
     create_object(core, factory_name, interface_type;
                   version=3, properties=nothing, callbacks...) -> Proxy

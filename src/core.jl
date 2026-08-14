@@ -15,6 +15,7 @@ end
 """
     Context()
     Context(loop::MainLoop)
+    Context(loop::ThreadLoop)
 
 Create an owning PipeWire context. The no-argument constructor also creates
 and owns a [`MainLoop`](@ref). When a loop is supplied, it must outlive the
@@ -22,15 +23,15 @@ context.
 
 Close every child [`CoreConnection`](@ref) before closing the context.
 """
-mutable struct Context
+mutable struct Context{LoopType<:AbstractPipeWireLoop}
     handle::Ptr{LibPipeWire.pw_context}
-    loop::MainLoop
+    loop::LoopType
     state_lock::ReentrantLock
     core_count::Int
     owns_loop::Bool
 end
 
-function _new_context(loop::MainLoop, owns_loop::Bool)
+function _new_context(loop::AbstractPipeWireLoop, owns_loop::Bool)
     native_loop = _retain_context(loop)
     handle = LibPipeWire.pw_context_new(native_loop, C_NULL, 0)
     if handle == C_NULL
@@ -45,7 +46,7 @@ function _new_context(loop::MainLoop, owns_loop::Bool)
     return context
 end
 
-Context(loop::MainLoop) = _new_context(loop, false)
+Context(loop::AbstractPipeWireLoop) = _new_context(loop, false)
 
 function Context()
     loop = MainLoop()
@@ -59,8 +60,8 @@ function _require_open(context::Context)
 end
 
 """
-    main_loop(context::Context) -> MainLoop
-    main_loop(core::CoreConnection) -> MainLoop
+    main_loop(context::Context) -> Union{MainLoop,ThreadLoop}
+    main_loop(core::CoreConnection) -> Union{MainLoop,ThreadLoop}
 
 Return the main loop associated with a managed PipeWire object.
 """
@@ -135,13 +136,14 @@ struct CoreMemory
     flags::UInt32
 end
 
-mutable struct CoreState
-    loop::MainLoop
+mutable struct CoreState{LoopType<:AbstractPipeWireLoop}
+    loop::LoopType
     lock::ReentrantLock
     pending::Union{Nothing,Cint}
     done::Bool
     error::Base.RefValue{Any}
     active::Bool
+    condition::Threads.Condition
 end
 
 """
@@ -151,9 +153,9 @@ An owning connection to a PipeWire core. Callback types are stored in the type
 parameter so native event dispatch can specialize without abstract callable
 fields.
 """
-mutable struct CoreConnection{Callbacks}
+mutable struct CoreConnection{Callbacks,ContextType<:Context,StateType<:CoreState}
     handle::Ptr{LibPipeWire.pw_core}
-    context::Context
+    context::ContextType
     state_lock::ReentrantLock
     registry_count::Int
     stream_count::Int
@@ -161,7 +163,7 @@ mutable struct CoreConnection{Callbacks}
     proxy_count::Int
     listener::Base.RefValue{LibPipeWire.spa_hook}
     events::Base.RefValue{LibPipeWire.pw_core_events}
-    callback_state::CoreState
+    callback_state::StateType
     callbacks::Callbacks
 end
 
@@ -169,11 +171,16 @@ function _stop_after_callback(state, error=nothing)
     lock(state.lock) do
         error !== nothing && state.error[] === nothing && (state.error[] = error)
     end
-    try
-        quit!(state.loop)
-    catch quit_error
-        lock(state.lock) do
-            state.error[] === nothing && (state.error[] = quit_error)
+    lock(state.condition) do
+        notify(state.condition; all=true)
+    end
+    if state.loop isa MainLoop
+        try
+            quit!(state.loop)
+        catch quit_error
+            lock(state.lock) do
+                state.error[] === nothing && (state.error[] = quit_error)
+            end
         end
     end
     return nothing
@@ -470,7 +477,15 @@ function CoreConnection(
         throw(PipeWireError(self ? :pw_context_connect_self : :pw_context_connect, -errno))
     end
 
-    state = CoreState(main_loop(context), ReentrantLock(), nothing, false, Ref{Any}(nothing), true)
+    state = CoreState(
+        main_loop(context),
+        ReentrantLock(),
+        nothing,
+        false,
+        Ref{Any}(nothing),
+        true,
+        Threads.Condition(),
+    )
     callbacks = (
         on_info=on_info,
         on_done=on_done,
@@ -641,13 +656,70 @@ function _release_registry(core::CoreConnection)
     end
 end
 
+function _begin_roundtrip(
+    core_handle::Ptr{LibPipeWire.pw_core},
+    state::CoreState,
+    loop::MainLoop,
+    previous::Cint,
+)
+    sequence = LibPipeWire.pw_core_sync(core_handle, _PW_ID_CORE, previous)
+    sequence < 0 && throw(PipeWireError(:pw_core_sync, sequence))
+    lock(state.lock) do
+        state.pending = sequence
+    end
+    return sequence
+end
+
+function _begin_roundtrip(
+    core_handle::Ptr{LibPipeWire.pw_core},
+    state::CoreState,
+    loop::ThreadLoop,
+    previous::Cint,
+)
+    return with_thread_loop_lock(loop) do _
+        sequence = LibPipeWire.pw_core_sync(core_handle, _PW_ID_CORE, previous)
+        sequence < 0 && throw(PipeWireError(:pw_core_sync, sequence))
+        lock(state.lock) do
+            state.pending = sequence
+        end
+        return sequence
+    end
+end
+
+function _wait_roundtrip(loop::MainLoop, state::CoreState)
+    run!(loop)
+    return nothing
+end
+
+function _wait_roundtrip(loop::ThreadLoop, state::CoreState)
+    started_here = !isrunning(loop)
+    started_here && start!(loop)
+    try
+        lock(state.condition)
+        try
+            while true
+                finished = lock(state.lock) do
+                    state.done || state.error[] !== nothing
+                end
+                finished && return nothing
+                wait(state.condition)
+            end
+        finally
+            unlock(state.condition)
+        end
+    finally
+        started_here && stop!(loop)
+    end
+end
+
 """
     roundtrip(core::CoreConnection)
     roundtrip(registry::Registry)
 
-Run the associated main loop until the PipeWire core acknowledges all messages
-sent before this call. Registry global events received during the roundtrip are
-available from [`globals`](@ref).
+Run the associated loop until the PipeWire core acknowledges all messages sent
+before this call. A stopped [`ThreadLoop`](@ref) is started for the operation
+and stopped again before returning. Registry global events received during the
+roundtrip are available from [`globals`](@ref).
 """
 function roundtrip(core::CoreConnection)
     core_handle = lock(core.state_lock) do
@@ -664,16 +736,11 @@ function roundtrip(core::CoreConnection)
         return Cint(0)
     end
 
-    sequence = LibPipeWire.pw_core_sync(core_handle, _PW_ID_CORE, previous)
-    if sequence < 0
-        throw(PipeWireError(:pw_core_sync, sequence))
-    end
-    lock(state.lock) do
-        state.pending = sequence
-    end
+    loop = main_loop(core)
+    _begin_roundtrip(core_handle, state, loop, previous)
 
     try
-        run!(main_loop(core))
+        _wait_roundtrip(loop, state)
         callback_error, done = lock(state.lock) do
             (state.error[], state.done)
         end

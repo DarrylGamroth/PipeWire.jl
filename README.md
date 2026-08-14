@@ -129,7 +129,11 @@ format = video_format(
 ```
 
 `with_registry` connects to the default PipeWire daemon. For an embedded
-in-process core, use `with_registry(self=true)`.
+in-process core, use `with_registry(self=true)`. It also accepts an existing
+loop, context/core properties, or a connected socket fd. PipeWire takes
+ownership of an fd passed to `CoreConnection` or `with_registry`.
+`find_global`, `find_globals`, and `registry[id]` return copied registry
+snapshots, including copied property dictionaries.
 
 ## Threaded loop and task bridge
 

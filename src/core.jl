@@ -14,8 +14,7 @@ end
 
 """
     Context()
-    Context(loop::MainLoop)
-    Context(loop::ThreadLoop)
+    Context([loop]; properties=nothing)
 
 Create an owning PipeWire context. The no-argument constructor also creates
 and owns a [`MainLoop`](@ref). When a loop is supplied, it must outlive the
@@ -31,9 +30,16 @@ mutable struct Context{LoopType<:AbstractPipeWireLoop}
     owns_loop::Bool
 end
 
-function _new_context(loop::AbstractPipeWireLoop, owns_loop::Bool)
+function _new_context(loop::AbstractPipeWireLoop, owns_loop::Bool, properties)
     native_loop = _retain_context(loop)
-    handle = LibPipeWire.pw_context_new(native_loop, C_NULL, 0)
+    native_properties = try
+        _owned_native_properties(properties)
+    catch
+        _release_context(loop)
+        owns_loop && close(loop)
+        rethrow()
+    end
+    handle = LibPipeWire.pw_context_new(native_loop, native_properties, 0)
     if handle == C_NULL
         errno = Base.Libc.errno()
         _release_context(loop)
@@ -46,11 +52,12 @@ function _new_context(loop::AbstractPipeWireLoop, owns_loop::Bool)
     return context
 end
 
-Context(loop::AbstractPipeWireLoop) = _new_context(loop, false)
+Context(loop::AbstractPipeWireLoop; properties=nothing) =
+    _new_context(loop, false, properties)
 
-function Context()
+function Context(; properties=nothing)
     loop = MainLoop()
-    return _new_context(loop, true)
+    return _new_context(loop, true, properties)
 end
 
 function _require_open(context::Context)
@@ -66,6 +73,30 @@ end
 Return the main loop associated with a managed PipeWire object.
 """
 main_loop(context::Context) = context.loop
+
+"Return a copied property snapshot for a PipeWire context."
+function context_properties(context::Context)
+    return lock(context.state_lock) do
+        pointer = LibPipeWire.pw_context_get_properties(_require_open(context))
+        pointer == C_NULL && return Dict{String,String}()
+        native = unsafe_load(pointer)
+        dictionary = Ref(native.dict)
+        return GC.@preserve dictionary _copy_properties(
+            Base.unsafe_convert(Ptr{LibPipeWire.spa_dict}, dictionary),
+        )
+    end
+end
+
+"Update PipeWire context properties and return `context`."
+function update_properties!(context::Context, properties)
+    _with_properties_dict(properties) do dictionary
+        result = lock(context.state_lock) do
+            LibPipeWire.pw_context_update_properties(_require_open(context), dictionary)
+        end
+        _check_result(:pw_context_update_properties, result)
+    end
+    return context
+end
 
 function Base.isopen(context::Context)
     return lock(context.state_lock) do
@@ -430,7 +461,9 @@ end
 Connect `context` to a PipeWire core. By default this connects to the daemon
 selected by PipeWire's client configuration. Set `self=true` to connect the
 context to an internal core, primarily for embedded use and deterministic
-tests. `properties` may be a [`Properties`](@ref) value or any iterable of
+tests. Pass an already-connected socket as `fd`; PipeWire takes ownership of
+that descriptor, including on connection failure. `self` and `fd` are mutually
+exclusive. `properties` may be a [`Properties`](@ref) value or any iterable of
 string pairs. A `Properties` argument is copied and remains open.
 
 `on_info(core, info)` receives copied [`CoreInfo`](@ref) snapshots.
@@ -448,6 +481,7 @@ core-created proxy before closing the connection.
 function CoreConnection(
     context::Context;
     self::Bool=false,
+    fd::Union{Nothing,Integer}=nothing,
     properties=nothing,
     on_info=nothing,
     on_done=nothing,
@@ -459,6 +493,15 @@ function CoreConnection(
     on_remove_memory=nothing,
     on_bound_properties=nothing,
 )
+    self && fd !== nothing &&
+        throw(ArgumentError("self and fd select mutually exclusive PipeWire connections"))
+    native_fd = if fd === nothing
+        nothing
+    else
+        typemin(Cint) <= fd <= typemax(Cint) ||
+            throw(ArgumentError("the PipeWire socket fd is outside Cint range"))
+        Cint(fd)
+    end
     context_handle = _retain_core(context)
     native_properties = try
         _owned_native_properties(properties)
@@ -468,13 +511,22 @@ function CoreConnection(
     end
     handle = if self
         LibPipeWire.pw_context_connect_self(context_handle, native_properties, 0)
+    elseif native_fd !== nothing
+        LibPipeWire.pw_context_connect_fd(context_handle, native_fd, native_properties, 0)
     else
         LibPipeWire.pw_context_connect(context_handle, native_properties, 0)
     end
     if handle == C_NULL
         errno = Base.Libc.errno()
         _release_core(context)
-        throw(PipeWireError(self ? :pw_context_connect_self : :pw_context_connect, -errno))
+        operation = if self
+            :pw_context_connect_self
+        elseif native_fd !== nothing
+            :pw_context_connect_fd
+        else
+            :pw_context_connect
+        end
+        throw(PipeWireError(operation, -errno))
     end
 
     state = CoreState(
@@ -1143,19 +1195,70 @@ function globals(registry::Registry)
     end
 end
 
+_copy_global(global_object::Global) = Global(
+    global_object.id,
+    global_object.permissions,
+    global_object.type,
+    global_object.version,
+    copy(global_object.properties),
+)
+
+"Return the copied global with `id`, or `nothing` when it is not present."
+function find_global(registry::Registry, id::Integer)
+    object_id = _core_uint32(id, "global ID")
+    lock(registry.state_lock) do
+        _require_open(registry)
+    end
+    state = registry.callback_state
+    error, global_object = lock(state.lock) do
+        (state.error[], get(state.globals, object_id, nothing))
+    end
+    error === nothing || throw(error)
+    return global_object === nothing ? nothing : _copy_global(global_object)
+end
+
+"Return copied globals matching an interface type and required properties."
+function find_globals(
+    registry::Registry;
+    interface::Union{Nothing,AbstractString}=nothing,
+    properties=(),
+)
+    required = Dict{String,String}(String(key) => String(value) for (key, value) in properties)
+    return filter(globals(registry)) do global_object
+        (interface === nothing || global_object.type == interface) &&
+            all(get(global_object.properties, key, nothing) == value for (key, value) in required)
+    end
+end
+
+function Base.getindex(registry::Registry, id::Integer)
+    global_object = find_global(registry, id)
+    global_object === nothing && throw(KeyError(id))
+    return global_object
+end
+
 """
-    with_registry(f; self=false)
+    with_registry(f; self=false, loop=nothing, context_properties=nothing,
+                  core_properties=nothing, fd=nothing)
 
 Create a context, core connection, and registry; call `f(registry)`; then close
 all three objects in dependency order. Set `self=true` to use an internal core.
 The registry passed to `f` is closed when this function returns.
 """
-function with_registry(f; self::Bool=false)
-    context = Context()
+function with_registry(
+    f;
+    self::Bool=false,
+    loop::Union{Nothing,AbstractPipeWireLoop}=nothing,
+    context_properties=nothing,
+    core_properties=nothing,
+    fd::Union{Nothing,Integer}=nothing,
+)
+    context = loop === nothing ?
+              Context(; properties=context_properties) :
+              Context(loop; properties=context_properties)
     core = nothing
     registry = nothing
     try
-        core = CoreConnection(context; self)
+        core = CoreConnection(context; self, fd, properties=core_properties)
         registry = Registry(core)
         return f(registry)
     finally

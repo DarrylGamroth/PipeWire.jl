@@ -256,10 +256,14 @@ end
 
 @testset "managed core and registry" begin
     loop = MainLoop()
-    context = Context(loop)
+    context = Context(loop; properties=Dict("application.name" => "PipeWire.jl context"))
     @test isopen(context)
     @test main_loop(context) === loop
+    @test context_properties(context)["application.name"] == "PipeWire.jl context"
+    @test update_properties!(context, Dict("pipewire.jl.context" => "updated")) === context
+    @test context_properties(context)["pipewire.jl.context"] == "updated"
     @test_throws InvalidStateException close(loop)
+    @test_throws ArgumentError CoreConnection(context; self=true, fd=0)
 
     core_infos = CoreInfo[]
     done_events = Tuple{UInt32,Cint}[]
@@ -291,6 +295,13 @@ end
     @test !isempty(first_snapshot)
     @test issorted(first_snapshot; by=global_object -> global_object.id)
     @test any(global_object -> global_object.type == "PipeWire:Interface:Core", first_snapshot)
+    @test find_global(registry, first_snapshot[1].id).id == first_snapshot[1].id
+    @test registry[first_snapshot[1].id].id == first_snapshot[1].id
+    @test find_global(registry, typemax(UInt32)) === nothing
+    @test_throws KeyError registry[typemax(UInt32)]
+    core_globals = find_globals(registry; interface="PipeWire:Interface:Core")
+    @test length(core_globals) == 1
+    @test core_globals[1].type == "PipeWire:Interface:Core"
 
     roundtrip(registry)
     second_snapshot = globals(registry)
@@ -317,6 +328,15 @@ end
         globals(scoped_registry)
     end
     @test !isempty(copied_globals)
+
+    scoped_name = with_registry(
+        self=true,
+        context_properties=Dict("application.name" => "PipeWire.jl scoped context"),
+        core_properties=Dict("application.name" => "PipeWire.jl scoped core"),
+    ) do scoped_registry
+        context_properties(scoped_registry.core.context)["application.name"]
+    end
+    @test scoped_name == "PipeWire.jl scoped context"
 end
 
 @testset "properties" begin

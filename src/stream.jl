@@ -66,19 +66,21 @@ function _invoke_stream_callback(stream::Stream, ::Val{Field}, args...) where {F
 end
 
 function _stream_state_changed(
-    data::Ptr{Cvoid},
+    stream::Stream,
     old::Int32,
     current::Int32,
     message::Cstring,
 )::Cvoid
-    stream = _callback_state(data, Stream)
     detail = message == C_NULL ? nothing : unsafe_string(message)
     _invoke_stream_callback(stream, Val(:on_state_changed), old, current, detail)
     return nothing
 end
 
-function _stream_param_changed(data::Ptr{Cvoid}, id::UInt32, param::Ptr{LibPipeWire.spa_pod})::Cvoid
-    stream = _callback_state(data, Stream)
+function _stream_param_changed(
+    stream::Stream,
+    id::UInt32,
+    param::Ptr{LibPipeWire.spa_pod},
+)::Cvoid
     try
         _invoke_stream_callback(stream, Val(:on_param_changed), id, _copy_pod(param))
     catch error
@@ -90,75 +92,66 @@ function _stream_param_changed(data::Ptr{Cvoid}, id::UInt32, param::Ptr{LibPipeW
     return nothing
 end
 
-function _stream_process(data::Ptr{Cvoid})::Cvoid
-    stream = _callback_state(data, Stream)
+function _stream_process(stream::Stream)::Cvoid
     _invoke_stream_callback(stream, Val(:on_process))
     return nothing
 end
 
-function _stream_buffer_added(data::Ptr{Cvoid}, buffer::Ptr{LibPipeWire.pw_buffer})::Cvoid
-    stream = _callback_state(data, Stream)
+function _stream_buffer_added(
+    stream::Stream,
+    buffer::Ptr{LibPipeWire.pw_buffer},
+)::Cvoid
     _invoke_stream_callback(stream, Val(:on_buffer_added), buffer)
     return nothing
 end
 
-function _stream_buffer_removed(data::Ptr{Cvoid}, buffer::Ptr{LibPipeWire.pw_buffer})::Cvoid
-    stream = _callback_state(data, Stream)
+function _stream_buffer_removed(
+    stream::Stream,
+    buffer::Ptr{LibPipeWire.pw_buffer},
+)::Cvoid
     _invoke_stream_callback(stream, Val(:on_buffer_removed), buffer)
     return nothing
 end
 
-function _stream_drained(data::Ptr{Cvoid})::Cvoid
-    stream = _callback_state(data, Stream)
+function _stream_drained(stream::Stream)::Cvoid
     _invoke_stream_callback(stream, Val(:on_drained))
     return nothing
 end
 
-const _STREAM_STATE_CHANGED = Ref{Ptr{Cvoid}}(C_NULL)
-const _STREAM_PARAM_CHANGED = Ref{Ptr{Cvoid}}(C_NULL)
-const _STREAM_PROCESS = Ref{Ptr{Cvoid}}(C_NULL)
-const _STREAM_BUFFER_ADDED = Ref{Ptr{Cvoid}}(C_NULL)
-const _STREAM_BUFFER_REMOVED = Ref{Ptr{Cvoid}}(C_NULL)
-const _STREAM_DRAINED = Ref{Ptr{Cvoid}}(C_NULL)
-
-function _initialize_stream_callbacks!()
-    _STREAM_STATE_CHANGED[] = @cfunction(
+function _stream_events(::T) where {T<:Stream}
+    state_changed = @cfunction(
         _stream_state_changed,
         Cvoid,
-        (Ptr{Cvoid}, Int32, Int32, Cstring),
+        (Ref{T}, Int32, Int32, Cstring),
     )
-    _STREAM_PARAM_CHANGED[] = @cfunction(
+    param_changed = @cfunction(
         _stream_param_changed,
         Cvoid,
-        (Ptr{Cvoid}, UInt32, Ptr{LibPipeWire.spa_pod}),
+        (Ref{T}, UInt32, Ptr{LibPipeWire.spa_pod}),
     )
-    _STREAM_PROCESS[] = @cfunction(_stream_process, Cvoid, (Ptr{Cvoid},))
-    _STREAM_BUFFER_ADDED[] = @cfunction(
+    process = @cfunction(_stream_process, Cvoid, (Ref{T},))
+    buffer_added = @cfunction(
         _stream_buffer_added,
         Cvoid,
-        (Ptr{Cvoid}, Ptr{LibPipeWire.pw_buffer}),
+        (Ref{T}, Ptr{LibPipeWire.pw_buffer}),
     )
-    _STREAM_BUFFER_REMOVED[] = @cfunction(
+    buffer_removed = @cfunction(
         _stream_buffer_removed,
         Cvoid,
-        (Ptr{Cvoid}, Ptr{LibPipeWire.pw_buffer}),
+        (Ref{T}, Ptr{LibPipeWire.pw_buffer}),
     )
-    _STREAM_DRAINED[] = @cfunction(_stream_drained, Cvoid, (Ptr{Cvoid},))
-    return nothing
-end
-
-function _stream_events()
+    drained = @cfunction(_stream_drained, Cvoid, (Ref{T},))
     return LibPipeWire.pw_stream_events(
         UInt32(2),
         _NULL_CALLBACK,
-        _STREAM_STATE_CHANGED[],
+        state_changed,
         _NULL_CALLBACK,
         _NULL_CALLBACK,
-        _STREAM_PARAM_CHANGED[],
-        _STREAM_BUFFER_ADDED[],
-        _STREAM_BUFFER_REMOVED[],
-        _STREAM_PROCESS[],
-        _STREAM_DRAINED[],
+        param_changed,
+        buffer_added,
+        buffer_removed,
+        process,
+        drained,
         _NULL_CALLBACK,
         _NULL_CALLBACK,
     )
@@ -203,7 +196,7 @@ function Stream(
         on_drained=on_drained,
     )
     listener = Ref(_zero_hook())
-    events = Ref(_stream_events())
+    events = Ref{LibPipeWire.pw_stream_events}()
     stream = Stream(
         handle,
         core,
@@ -216,6 +209,12 @@ function Stream(
         true,
         false,
     )
+    try
+        events[] = _stream_events(stream)
+    catch
+        close(stream)
+        rethrow()
+    end
     GC.@preserve stream listener events begin
         LibPipeWire.pw_stream_add_listener(
             handle,

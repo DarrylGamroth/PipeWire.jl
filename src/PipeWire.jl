@@ -90,7 +90,7 @@ export CoreConnection,
     pod_type,
     pod_value,
     pong!,
-    process_position,
+    position_snapshot,
     proxy_id,
     queue_buffer!,
     remove_port!,
@@ -138,11 +138,7 @@ Return the version of the loaded PipeWire client library.
 library_version() = VersionNumber(unsafe_string(LibPipeWire.pw_get_library_version()))
 
 function __init__()
-    _initialize_callbacks!()
-    _initialize_proxy_callbacks!()
-    _initialize_object_callbacks!()
-    _initialize_stream_callbacks!()
-    _initialize_filter_callbacks!()
+    _initialize_registry_callbacks!()
     return nothing
 end
 

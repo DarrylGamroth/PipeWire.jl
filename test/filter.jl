@@ -5,10 +5,11 @@ struct FilterProcessRecorder
     count::Base.RefValue{Int}
 end
 
-function (callback::FilterProcessRecorder)(filter::Filter)
-    position = process_position(filter)
-    position === nothing && error("the process position is unavailable")
-    callback.count[] += position.state == 0
+function (callback::FilterProcessRecorder)(
+    ::Filter,
+    position::Union{Nothing,FilterPosition},
+)
+    callback.count[] += position === nothing ? 2 : 1
     return nothing
 end
 
@@ -23,14 +24,23 @@ function (callback::FilterIORecorder)(::Filter, port, io::FilterIO)
     return nothing
 end
 
-function invoke_filter_process(filter, position)
-    GC.@preserve filter PipeWire._filter_process(pointer_from_objref(filter), position)
+function invoke_filter_process(filter::T, position) where {T<:Filter}
+    ccall(
+        filter.events[].process,
+        Cvoid,
+        (Ref{T}, Ptr{PipeWire.LibPipeWire.spa_io_position}),
+        filter,
+        position,
+    )
     return nothing
 end
 
 function filter_process_allocations(filter, position)
     invoke_filter_process(filter, position)
-    return @allocated invoke_filter_process(filter, position)
+    nonnull = @allocated invoke_filter_process(filter, position)
+    invoke_filter_process(filter, C_NULL)
+    null = @allocated invoke_filter_process(filter, C_NULL)
+    return nonnull, null
 end
 
 @testset "managed filter" begin
@@ -62,22 +72,26 @@ end
         on_drained=filter -> (drained[] += 1),
         on_command=(filter, command) -> push!(commands, command),
     )
-    position_storage = zeros(UInt8, sizeof(FilterPosition))
-    position_pointer = Ptr{FilterPosition}(pointer(position_storage))
+    position_storage = zeros(UInt8, sizeof(PipeWire.LibPipeWire.spa_io_position))
+    position_pointer = Ptr{PipeWire.LibPipeWire.spa_io_position}(
+        pointer(position_storage),
+    )
 
     @test isopen(filter)
     @test main_loop(filter) === main_loop(core)
     @test filter_name(filter) == "Julia managed filter"
     @test filter_state(filter) == PipeWire.LibPipeWire.PW_FILTER_STATE_UNCONNECTED
-    @test process_position(filter) === nothing
     @test isbitstype(FilterPosition)
+    @test sizeof(FilterPosition) == sizeof(Ptr{Cvoid})
+    position = FilterPosition(position_pointer)
+    @test position_snapshot(position).state == 0
     @test isconcretetype(typeof(filter))
     @test all(isconcretetype, fieldtypes(typeof(filter)))
     @test GC.@preserve position_storage filter_process_allocations(
         filter,
         position_pointer,
-    ) == 0
-    @test process_count[] == 2
+    ) == (0, 0)
+    @test process_count[] == 6
     @test_throws InvalidStateException close(core)
     @test_throws ArgumentError Filter(core, "bad\0name")
 
@@ -120,7 +134,7 @@ end
 
     area = Ref(UInt32(9))
     GC.@preserve filter input area PipeWire._filter_io_changed(
-        pointer_from_objref(filter),
+        filter,
         input.handle,
         UInt32(7),
         Base.unsafe_convert(Ptr{Cvoid}, area),
@@ -133,7 +147,7 @@ end
 
     param = audio_format()
     GC.@preserve filter input param PipeWire._filter_param_changed(
-        pointer_from_objref(filter),
+        filter,
         input.handle,
         UInt32(3),
         PipeWire._pod_pointer(param),
@@ -147,26 +161,26 @@ end
     native_buffer_pointer = Ptr{PipeWire.LibPipeWire.pw_buffer}(1)
     GC.@preserve filter input state_detail begin
         PipeWire._filter_state_changed(
-            pointer_from_objref(filter),
+            filter,
             Int32(0),
             Int32(1),
             Cstring(pointer(state_detail)),
         )
         PipeWire._filter_buffer_added(
-            pointer_from_objref(filter),
+            filter,
             input.handle,
             native_buffer_pointer,
         )
         PipeWire._filter_buffer_removed(
-            pointer_from_objref(filter),
+            filter,
             input.handle,
             native_buffer_pointer,
         )
         PipeWire._filter_command(
-            pointer_from_objref(filter),
+            filter,
             Ptr{PipeWire.LibPipeWire.spa_command}(PipeWire._pod_pointer(param)),
         )
-        PipeWire._filter_drained(pointer_from_objref(filter))
+        PipeWire._filter_drained(filter)
     end
     @test state_changes == [(Int32(0), Int32(1), "callback state")]
     @test added_buffers == [(input, native_buffer_pointer)]

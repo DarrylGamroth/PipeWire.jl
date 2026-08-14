@@ -20,8 +20,23 @@ struct FilterIO
     size::UInt32
 end
 
-"A concrete snapshot of the graph position supplied to a filter process callback."
-const FilterPosition = LibPipeWire.spa_io_position
+"""
+    FilterPosition
+
+A borrowed graph-position view supplied to a filter process callback. The view
+is valid only for the duration of that callback. Use [`position_snapshot`](@ref)
+to make a concrete copy that can be retained.
+"""
+struct FilterPosition
+    pointer::Ptr{LibPipeWire.spa_io_position}
+end
+
+"Copy a borrowed filter position into a concrete native position value."
+function position_snapshot(position::FilterPosition)
+    position.pointer == C_NULL &&
+        throw(InvalidStateException("the filter position is unavailable", :unavailable))
+    return unsafe_load(position.pointer)
+end
 
 """
     FilterPort
@@ -68,11 +83,12 @@ filter type. Julia callbacks are not hard-real-time safe, so
 
 The callback keywords are `on_state_changed`, `on_io_changed`,
 `on_param_changed`, `on_buffer_added`, `on_buffer_removed`, `on_process`,
-`on_drained`, and `on_command`. The process callback receives only `filter`;
-call [`process_position`](@ref) from it when a position snapshot is needed.
-A warmed `on_process(filter)` callback whose callable does not allocate has a
-zero-byte steady-state allocation contract. Callback errors, copied
-parameter/command PODs, and a retained position snapshot are excluded.
+`on_drained`, and `on_command`. The process callback receives
+`(filter, position)`, where `position` is either a borrowed
+[`FilterPosition`](@ref) or `nothing`. A warmed process callback whose callable
+does not allocate has a zero-byte steady-state allocation contract. Callback
+errors, copied parameter/command PODs, and an explicitly copied position
+snapshot are excluded.
 """
 mutable struct Filter{CoreType<:CoreConnection,Callbacks}
     handle::Ptr{LibPipeWire.pw_filter}
@@ -84,7 +100,6 @@ mutable struct Filter{CoreType<:CoreConnection,Callbacks}
     callbacks::Callbacks
     callback_error::Base.RefValue{Any}
     ports::Vector{FilterPort}
-    process_position::Base.RefValue{Ptr{LibPipeWire.spa_io_position}}
     callbacks_active::Bool
     connected::Bool
 end
@@ -185,25 +200,23 @@ function _invoke_filter_callback(
 end
 
 function _filter_state_changed(
-    data::Ptr{Cvoid},
+    filter::Filter,
     old::Int32,
     current::Int32,
     message::Cstring,
 )::Cvoid
-    filter = _callback_state(data, Filter)
     detail = message == C_NULL ? nothing : unsafe_string(message)
     _invoke_filter_callback(filter, Val(:on_state_changed), old, current, detail)
     return nothing
 end
 
 function _filter_io_changed(
-    data::Ptr{Cvoid},
+    filter::Filter,
     port_data::Ptr{Cvoid},
     id::UInt32,
     area::Ptr{Cvoid},
     size::UInt32,
 )::Cvoid
-    filter = _callback_state(data, Filter)
     _invoke_filter_callback(
         filter,
         Val(:on_io_changed),
@@ -214,12 +227,11 @@ function _filter_io_changed(
 end
 
 function _filter_param_changed(
-    data::Ptr{Cvoid},
+    filter::Filter,
     port_data::Ptr{Cvoid},
     id::UInt32,
     param::Ptr{LibPipeWire.spa_pod},
 )::Cvoid
-    filter = _callback_state(data, Filter)
     try
         _invoke_filter_callback(
             filter,
@@ -238,44 +250,41 @@ function _filter_param_changed(
 end
 
 function _filter_buffer_added(
-    data::Ptr{Cvoid},
+    filter::Filter,
     port_data::Ptr{Cvoid},
     buffer::Ptr{LibPipeWire.pw_buffer},
 )::Cvoid
-    filter = _callback_state(data, Filter)
     _invoke_filter_callback(filter, Val(:on_buffer_added), _filter_port(port_data), buffer)
     return nothing
 end
 
 function _filter_buffer_removed(
-    data::Ptr{Cvoid},
+    filter::Filter,
     port_data::Ptr{Cvoid},
     buffer::Ptr{LibPipeWire.pw_buffer},
 )::Cvoid
-    filter = _callback_state(data, Filter)
     _invoke_filter_callback(filter, Val(:on_buffer_removed), _filter_port(port_data), buffer)
     return nothing
 end
 
 function _filter_process(
-    data::Ptr{Cvoid},
+    filter::Filter,
     position::Ptr{LibPipeWire.spa_io_position},
 )::Cvoid
-    filter = _callback_state(data, Filter)
-    filter.process_position[] = position
-    _invoke_filter_callback(filter, Val(:on_process))
-    filter.process_position[] = Ptr{LibPipeWire.spa_io_position}(C_NULL)
+    view = position == C_NULL ? nothing : FilterPosition(position)
+    _invoke_filter_callback(filter, Val(:on_process), view)
     return nothing
 end
 
-function _filter_drained(data::Ptr{Cvoid})::Cvoid
-    filter = _callback_state(data, Filter)
+function _filter_drained(filter::Filter)::Cvoid
     _invoke_filter_callback(filter, Val(:on_drained))
     return nothing
 end
 
-function _filter_command(data::Ptr{Cvoid}, command::Ptr{LibPipeWire.spa_command})::Cvoid
-    filter = _callback_state(data, Filter)
+function _filter_command(
+    filter::Filter,
+    command::Ptr{LibPipeWire.spa_command},
+)::Cvoid
     try
         _invoke_filter_callback(
             filter,
@@ -291,67 +300,54 @@ function _filter_command(data::Ptr{Cvoid}, command::Ptr{LibPipeWire.spa_command}
     return nothing
 end
 
-const _FILTER_STATE_CHANGED = Ref{Ptr{Cvoid}}(C_NULL)
-const _FILTER_IO_CHANGED = Ref{Ptr{Cvoid}}(C_NULL)
-const _FILTER_PARAM_CHANGED = Ref{Ptr{Cvoid}}(C_NULL)
-const _FILTER_BUFFER_ADDED = Ref{Ptr{Cvoid}}(C_NULL)
-const _FILTER_BUFFER_REMOVED = Ref{Ptr{Cvoid}}(C_NULL)
-const _FILTER_PROCESS = Ref{Ptr{Cvoid}}(C_NULL)
-const _FILTER_DRAINED = Ref{Ptr{Cvoid}}(C_NULL)
-const _FILTER_COMMAND = Ref{Ptr{Cvoid}}(C_NULL)
-
-function _initialize_filter_callbacks!()
-    _FILTER_STATE_CHANGED[] = @cfunction(
+function _filter_events(::T) where {T<:Filter}
+    state_changed = @cfunction(
         _filter_state_changed,
         Cvoid,
-        (Ptr{Cvoid}, Int32, Int32, Cstring),
+        (Ref{T}, Int32, Int32, Cstring),
     )
-    _FILTER_IO_CHANGED[] = @cfunction(
+    io_changed = @cfunction(
         _filter_io_changed,
         Cvoid,
-        (Ptr{Cvoid}, Ptr{Cvoid}, UInt32, Ptr{Cvoid}, UInt32),
+        (Ref{T}, Ptr{Cvoid}, UInt32, Ptr{Cvoid}, UInt32),
     )
-    _FILTER_PARAM_CHANGED[] = @cfunction(
+    param_changed = @cfunction(
         _filter_param_changed,
         Cvoid,
-        (Ptr{Cvoid}, Ptr{Cvoid}, UInt32, Ptr{LibPipeWire.spa_pod}),
+        (Ref{T}, Ptr{Cvoid}, UInt32, Ptr{LibPipeWire.spa_pod}),
     )
-    _FILTER_BUFFER_ADDED[] = @cfunction(
+    buffer_added = @cfunction(
         _filter_buffer_added,
         Cvoid,
-        (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{LibPipeWire.pw_buffer}),
+        (Ref{T}, Ptr{Cvoid}, Ptr{LibPipeWire.pw_buffer}),
     )
-    _FILTER_BUFFER_REMOVED[] = @cfunction(
+    buffer_removed = @cfunction(
         _filter_buffer_removed,
         Cvoid,
-        (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{LibPipeWire.pw_buffer}),
+        (Ref{T}, Ptr{Cvoid}, Ptr{LibPipeWire.pw_buffer}),
     )
-    _FILTER_PROCESS[] = @cfunction(
+    process = @cfunction(
         _filter_process,
         Cvoid,
-        (Ptr{Cvoid}, Ptr{LibPipeWire.spa_io_position}),
+        (Ref{T}, Ptr{LibPipeWire.spa_io_position}),
     )
-    _FILTER_DRAINED[] = @cfunction(_filter_drained, Cvoid, (Ptr{Cvoid},))
-    _FILTER_COMMAND[] = @cfunction(
+    drained = @cfunction(_filter_drained, Cvoid, (Ref{T},))
+    command = @cfunction(
         _filter_command,
         Cvoid,
-        (Ptr{Cvoid}, Ptr{LibPipeWire.spa_command}),
+        (Ref{T}, Ptr{LibPipeWire.spa_command}),
     )
-    return nothing
-end
-
-function _filter_events()
     return LibPipeWire.pw_filter_events(
         UInt32(1),
         _NULL_CALLBACK,
-        _FILTER_STATE_CHANGED[],
-        _FILTER_IO_CHANGED[],
-        _FILTER_PARAM_CHANGED[],
-        _FILTER_BUFFER_ADDED[],
-        _FILTER_BUFFER_REMOVED[],
-        _FILTER_PROCESS[],
-        _FILTER_DRAINED[],
-        _FILTER_COMMAND[],
+        state_changed,
+        io_changed,
+        param_changed,
+        buffer_added,
+        buffer_removed,
+        process,
+        drained,
+        command,
     )
 end
 
@@ -397,7 +393,7 @@ function Filter(
         on_command=on_command,
     )
     listener = Ref(_zero_hook())
-    events = Ref(_filter_events())
+    events = Ref{LibPipeWire.pw_filter_events}()
     filter = Filter(
         handle,
         core,
@@ -408,10 +404,15 @@ function Filter(
         callbacks,
         Ref{Any}(nothing),
         FilterPort[],
-        Ref(Ptr{LibPipeWire.spa_io_position}(C_NULL)),
         true,
         false,
     )
+    try
+        events[] = _filter_events(filter)
+    catch
+        close(filter)
+        rethrow()
+    end
     GC.@preserve filter listener events LibPipeWire.pw_filter_add_listener(
         handle,
         Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
@@ -466,7 +467,6 @@ function Base.close(filter::Filter)
         filter.callbacks_active = false
     end
     LibPipeWire.pw_filter_destroy(handle)
-    filter.process_position[] = Ptr{LibPipeWire.spa_io_position}(C_NULL)
     for port in filter.ports
         port.handle = C_NULL
     end
@@ -503,18 +503,6 @@ function node_id(filter::Filter)
     return lock(filter.state_lock) do
         LibPipeWire.pw_filter_get_node_id(_require_open(filter))
     end
-end
-
-"""
-    process_position(filter) -> Union{Nothing,FilterPosition}
-
-Copy the graph position for the current process callback. Return `nothing`
-outside `on_process`. A snapshot that escapes the callback may allocate; the
-normal process callback path does not create one unless this function is used.
-"""
-function process_position(filter::Filter)
-    pointer = filter.process_position[]
-    return pointer == C_NULL ? nothing : unsafe_load(pointer)
 end
 
 function _filter_params(params)

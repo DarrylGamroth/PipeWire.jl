@@ -191,9 +191,9 @@ use `RT_PROCESS`.
 ```julia
 context = Context()
 core = CoreConnection(context)
-filter = Filter(core, "Julia gain"; on_process=filter -> begin
+filter = Filter(core, "Julia gain"; on_process=(filter, position) -> begin
     # Dequeue from each port, process the mapped planes, then queue each buffer.
-    # Call process_position(filter) here when graph timing is needed.
+    # The second callback argument is a borrowed FilterPosition when available.
 end)
 
 input = add_port!(

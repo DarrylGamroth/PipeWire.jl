@@ -391,8 +391,7 @@ function _with_object_handle(call, object::ManagedObject, ::Type{T}) where {T}
     end
 end
 
-function _node_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_node_info})::Cvoid
-    object = _callback_state(data, Node)
+function _node_info(object::Node, info::Ptr{LibPipeWire.pw_node_info})::Cvoid
     try
         _invoke_object_callback(object, Val(:on_info), _copy_node_info(info))
     catch error
@@ -401,8 +400,7 @@ function _node_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_node_info})::Cvoi
     return nothing
 end
 
-function _port_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_port_info})::Cvoid
-    object = _callback_state(data, Port)
+function _port_info(object::Port, info::Ptr{LibPipeWire.pw_port_info})::Cvoid
     try
         _invoke_object_callback(object, Val(:on_info), _copy_port_info(info))
     catch error
@@ -411,8 +409,7 @@ function _port_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_port_info})::Cvoi
     return nothing
 end
 
-function _device_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_device_info})::Cvoid
-    object = _callback_state(data, Device)
+function _device_info(object::Device, info::Ptr{LibPipeWire.pw_device_info})::Cvoid
     try
         _invoke_object_callback(object, Val(:on_info), _copy_device_info(info))
     catch error
@@ -421,8 +418,7 @@ function _device_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_device_info})::
     return nothing
 end
 
-function _link_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_link_info})::Cvoid
-    object = _callback_state(data, Link)
+function _link_info(object::Link, info::Ptr{LibPipeWire.pw_link_info})::Cvoid
     try
         _invoke_object_callback(object, Val(:on_info), _copy_link_info(info))
     catch error
@@ -431,8 +427,10 @@ function _link_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_link_info})::Cvoi
     return nothing
 end
 
-function _factory_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_factory_info})::Cvoid
-    object = _callback_state(data, Factory)
+function _factory_info(
+    object::Factory,
+    info::Ptr{LibPipeWire.pw_factory_info},
+)::Cvoid
     try
         _invoke_object_callback(object, Val(:on_info), _copy_factory_info(info))
     catch error
@@ -441,8 +439,10 @@ function _factory_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_factory_info})
     return nothing
 end
 
-function _module_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_module_info})::Cvoid
-    object = _callback_state(data, PipeWireModule)
+function _module_info(
+    object::PipeWireModule,
+    info::Ptr{LibPipeWire.pw_module_info},
+)::Cvoid
     try
         _invoke_object_callback(object, Val(:on_info), _copy_module_info(info))
     catch error
@@ -451,8 +451,7 @@ function _module_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_module_info})::
     return nothing
 end
 
-function _client_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_client_info})::Cvoid
-    object = _callback_state(data, Client)
+function _client_info(object::Client, info::Ptr{LibPipeWire.pw_client_info})::Cvoid
     try
         _invoke_object_callback(object, Val(:on_info), _copy_client_info(info))
     catch error
@@ -462,12 +461,11 @@ function _client_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_client_info})::
 end
 
 function _client_permissions(
-    data::Ptr{Cvoid},
+    object::Client,
     index::UInt32,
     count::UInt32,
     permissions::Ptr{LibPipeWire.pw_permission},
 )::Cvoid
-    object = _callback_state(data, Client)
     try
         _invoke_object_callback(
             object,
@@ -513,26 +511,46 @@ function _object_param(
     return nothing
 end
 
-function _node_param(data::Ptr{Cvoid}, seq::Cint, id::UInt32, index::UInt32, next::UInt32, param::Ptr{LibPipeWire.spa_pod})::Cvoid
-    _object_param(_callback_state(data, Node), seq, id, index, next, param)
+function _node_param(
+    object::Node,
+    sequence::Cint,
+    id::UInt32,
+    index::UInt32,
+    next::UInt32,
+    param::Ptr{LibPipeWire.spa_pod},
+)::Cvoid
+    _object_param(object, sequence, id, index, next, param)
 end
 
-function _port_param(data::Ptr{Cvoid}, seq::Cint, id::UInt32, index::UInt32, next::UInt32, param::Ptr{LibPipeWire.spa_pod})::Cvoid
-    _object_param(_callback_state(data, Port), seq, id, index, next, param)
+function _port_param(
+    object::Port,
+    sequence::Cint,
+    id::UInt32,
+    index::UInt32,
+    next::UInt32,
+    param::Ptr{LibPipeWire.spa_pod},
+)::Cvoid
+    _object_param(object, sequence, id, index, next, param)
 end
 
-function _device_param(data::Ptr{Cvoid}, seq::Cint, id::UInt32, index::UInt32, next::UInt32, param::Ptr{LibPipeWire.spa_pod})::Cvoid
-    _object_param(_callback_state(data, Device), seq, id, index, next, param)
+function _device_param(
+    object::Device,
+    sequence::Cint,
+    id::UInt32,
+    index::UInt32,
+    next::UInt32,
+    param::Ptr{LibPipeWire.spa_pod},
+)::Cvoid
+    _object_param(object, sequence, id, index, next, param)
 end
 
 function _metadata_property(
-    data::Ptr{Cvoid},
+    object::Metadata,
     subject::UInt32,
     key::Cstring,
     type::Cstring,
     value::Cstring,
 )::Cint
-    object = _callback_state(data, Metadata)
     try
         _invoke_object_callback(
             object,
@@ -548,37 +566,84 @@ function _metadata_property(
     return Cint(0)
 end
 
-const _NODE_INFO = Ref{Ptr{Cvoid}}(C_NULL)
-const _NODE_PARAM = Ref{Ptr{Cvoid}}(C_NULL)
-const _PORT_INFO = Ref{Ptr{Cvoid}}(C_NULL)
-const _PORT_PARAM = Ref{Ptr{Cvoid}}(C_NULL)
-const _DEVICE_INFO = Ref{Ptr{Cvoid}}(C_NULL)
-const _DEVICE_PARAM = Ref{Ptr{Cvoid}}(C_NULL)
-const _LINK_INFO = Ref{Ptr{Cvoid}}(C_NULL)
-const _METADATA_PROPERTY = Ref{Ptr{Cvoid}}(C_NULL)
-const _FACTORY_INFO = Ref{Ptr{Cvoid}}(C_NULL)
-const _MODULE_INFO = Ref{Ptr{Cvoid}}(C_NULL)
-const _CLIENT_INFO = Ref{Ptr{Cvoid}}(C_NULL)
-const _CLIENT_PERMISSIONS = Ref{Ptr{Cvoid}}(C_NULL)
+function _node_events(::T) where {T<:Node}
+    info = @cfunction(_node_info, Cvoid, (Ref{T}, Ptr{LibPipeWire.pw_node_info}))
+    param = @cfunction(
+        _node_param,
+        Cvoid,
+        (Ref{T}, Cint, UInt32, UInt32, UInt32, Ptr{LibPipeWire.spa_pod}),
+    )
+    return LibPipeWire.pw_node_events(UInt32(0), info, param)
+end
 
-function _initialize_object_callbacks!()
-    _NODE_INFO[] = @cfunction(_node_info, Cvoid, (Ptr{Cvoid}, Ptr{LibPipeWire.pw_node_info}))
-    _NODE_PARAM[] = @cfunction(_node_param, Cvoid, (Ptr{Cvoid}, Cint, UInt32, UInt32, UInt32, Ptr{LibPipeWire.spa_pod}))
-    _PORT_INFO[] = @cfunction(_port_info, Cvoid, (Ptr{Cvoid}, Ptr{LibPipeWire.pw_port_info}))
-    _PORT_PARAM[] = @cfunction(_port_param, Cvoid, (Ptr{Cvoid}, Cint, UInt32, UInt32, UInt32, Ptr{LibPipeWire.spa_pod}))
-    _DEVICE_INFO[] = @cfunction(_device_info, Cvoid, (Ptr{Cvoid}, Ptr{LibPipeWire.pw_device_info}))
-    _DEVICE_PARAM[] = @cfunction(_device_param, Cvoid, (Ptr{Cvoid}, Cint, UInt32, UInt32, UInt32, Ptr{LibPipeWire.spa_pod}))
-    _LINK_INFO[] = @cfunction(_link_info, Cvoid, (Ptr{Cvoid}, Ptr{LibPipeWire.pw_link_info}))
-    _METADATA_PROPERTY[] = @cfunction(_metadata_property, Cint, (Ptr{Cvoid}, UInt32, Cstring, Cstring, Cstring))
-    _FACTORY_INFO[] = @cfunction(_factory_info, Cvoid, (Ptr{Cvoid}, Ptr{LibPipeWire.pw_factory_info}))
-    _MODULE_INFO[] = @cfunction(_module_info, Cvoid, (Ptr{Cvoid}, Ptr{LibPipeWire.pw_module_info}))
-    _CLIENT_INFO[] = @cfunction(_client_info, Cvoid, (Ptr{Cvoid}, Ptr{LibPipeWire.pw_client_info}))
-    _CLIENT_PERMISSIONS[] = @cfunction(
+function _port_events(::T) where {T<:Port}
+    info = @cfunction(_port_info, Cvoid, (Ref{T}, Ptr{LibPipeWire.pw_port_info}))
+    param = @cfunction(
+        _port_param,
+        Cvoid,
+        (Ref{T}, Cint, UInt32, UInt32, UInt32, Ptr{LibPipeWire.spa_pod}),
+    )
+    return LibPipeWire.pw_port_events(UInt32(0), info, param)
+end
+
+function _device_events(::T) where {T<:Device}
+    info = @cfunction(
+        _device_info,
+        Cvoid,
+        (Ref{T}, Ptr{LibPipeWire.pw_device_info}),
+    )
+    param = @cfunction(
+        _device_param,
+        Cvoid,
+        (Ref{T}, Cint, UInt32, UInt32, UInt32, Ptr{LibPipeWire.spa_pod}),
+    )
+    return LibPipeWire.pw_device_events(UInt32(0), info, param)
+end
+
+function _link_events(::T) where {T<:Link}
+    info = @cfunction(_link_info, Cvoid, (Ref{T}, Ptr{LibPipeWire.pw_link_info}))
+    return LibPipeWire.pw_link_events(UInt32(0), info)
+end
+
+function _metadata_events(::T) where {T<:Metadata}
+    property = @cfunction(
+        _metadata_property,
+        Cint,
+        (Ref{T}, UInt32, Cstring, Cstring, Cstring),
+    )
+    return LibPipeWire.pw_metadata_events(UInt32(0), property)
+end
+
+function _factory_events(::T) where {T<:Factory}
+    info = @cfunction(
+        _factory_info,
+        Cvoid,
+        (Ref{T}, Ptr{LibPipeWire.pw_factory_info}),
+    )
+    return LibPipeWire.pw_factory_events(UInt32(0), info)
+end
+
+function _module_events(::T) where {T<:PipeWireModule}
+    info = @cfunction(
+        _module_info,
+        Cvoid,
+        (Ref{T}, Ptr{LibPipeWire.pw_module_info}),
+    )
+    return LibPipeWire.pw_module_events(UInt32(0), info)
+end
+
+function _client_events(::T) where {T<:Client}
+    info = @cfunction(
+        _client_info,
+        Cvoid,
+        (Ref{T}, Ptr{LibPipeWire.pw_client_info}),
+    )
+    permissions = @cfunction(
         _client_permissions,
         Cvoid,
-        (Ptr{Cvoid}, UInt32, UInt32, Ptr{LibPipeWire.pw_permission}),
+        (Ref{T}, UInt32, UInt32, Ptr{LibPipeWire.pw_permission}),
     )
-    return nothing
+    return LibPipeWire.pw_client_events(UInt32(0), info, permissions)
 end
 
 function _proxy_callback_keywords(on_bound, on_removed, on_done, on_error, on_bound_properties)
@@ -593,9 +658,15 @@ end
 
 function _attach_node(proxy::Proxy, on_info, on_param)
     listener = Ref(_zero_hook())
-    events = Ref(LibPipeWire.pw_node_events(UInt32(0), _NODE_INFO[], _NODE_PARAM[]))
+    events = Ref{LibPipeWire.pw_node_events}()
     callbacks = (on_info=on_info, on_param=on_param)
     object = Node(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
+    try
+        events[] = _node_events(object)
+    catch
+        close(object)
+        rethrow()
+    end
     result = GC.@preserve object listener events LibPipeWire.pw_node_add_listener(
         Ptr{LibPipeWire.pw_node}(proxy.handle),
         Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
@@ -610,9 +681,15 @@ end
 
 function _attach_port(proxy::Proxy, on_info, on_param)
     listener = Ref(_zero_hook())
-    events = Ref(LibPipeWire.pw_port_events(UInt32(0), _PORT_INFO[], _PORT_PARAM[]))
+    events = Ref{LibPipeWire.pw_port_events}()
     callbacks = (on_info=on_info, on_param=on_param)
     object = Port(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
+    try
+        events[] = _port_events(object)
+    catch
+        close(object)
+        rethrow()
+    end
     result = GC.@preserve object listener events LibPipeWire.pw_port_add_listener(
         Ptr{LibPipeWire.pw_port}(proxy.handle),
         Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
@@ -626,9 +703,15 @@ end
 
 function _attach_device(proxy::Proxy, on_info, on_param)
     listener = Ref(_zero_hook())
-    events = Ref(LibPipeWire.pw_device_events(UInt32(0), _DEVICE_INFO[], _DEVICE_PARAM[]))
+    events = Ref{LibPipeWire.pw_device_events}()
     callbacks = (on_info=on_info, on_param=on_param)
     object = Device(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
+    try
+        events[] = _device_events(object)
+    catch
+        close(object)
+        rethrow()
+    end
     result = GC.@preserve object listener events LibPipeWire.pw_device_add_listener(
         Ptr{LibPipeWire.pw_device}(proxy.handle),
         Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
@@ -642,9 +725,15 @@ end
 
 function _attach_link(proxy::Proxy, on_info)
     listener = Ref(_zero_hook())
-    events = Ref(LibPipeWire.pw_link_events(UInt32(0), _LINK_INFO[]))
+    events = Ref{LibPipeWire.pw_link_events}()
     callbacks = (on_info=on_info,)
     object = Link(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
+    try
+        events[] = _link_events(object)
+    catch
+        close(object)
+        rethrow()
+    end
     result = GC.@preserve object listener events LibPipeWire.pw_link_add_listener(
         Ptr{LibPipeWire.pw_link}(proxy.handle),
         Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
@@ -658,9 +747,15 @@ end
 
 function _attach_factory(proxy::Proxy, on_info)
     listener = Ref(_zero_hook())
-    events = Ref(LibPipeWire.pw_factory_events(UInt32(0), _FACTORY_INFO[]))
+    events = Ref{LibPipeWire.pw_factory_events}()
     callbacks = (on_info=on_info,)
     object = Factory(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
+    try
+        events[] = _factory_events(object)
+    catch
+        close(object)
+        rethrow()
+    end
     result = GC.@preserve object listener events LibPipeWire.pw_factory_add_listener(
         Ptr{LibPipeWire.pw_factory}(proxy.handle),
         Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
@@ -674,9 +769,15 @@ end
 
 function _attach_module(proxy::Proxy, on_info)
     listener = Ref(_zero_hook())
-    events = Ref(LibPipeWire.pw_module_events(UInt32(0), _MODULE_INFO[]))
+    events = Ref{LibPipeWire.pw_module_events}()
     callbacks = (on_info=on_info,)
     object = PipeWireModule(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
+    try
+        events[] = _module_events(object)
+    catch
+        close(object)
+        rethrow()
+    end
     result = GC.@preserve object listener events LibPipeWire.pw_module_add_listener(
         Ptr{LibPipeWire.pw_module}(proxy.handle),
         Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
@@ -690,11 +791,15 @@ end
 
 function _attach_client(proxy::Proxy, on_info, on_permissions)
     listener = Ref(_zero_hook())
-    events = Ref(
-        LibPipeWire.pw_client_events(UInt32(0), _CLIENT_INFO[], _CLIENT_PERMISSIONS[]),
-    )
+    events = Ref{LibPipeWire.pw_client_events}()
     callbacks = (on_info=on_info, on_permissions=on_permissions)
     object = Client(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
+    try
+        events[] = _client_events(object)
+    catch
+        close(object)
+        rethrow()
+    end
     result = GC.@preserve object listener events LibPipeWire.pw_client_add_listener(
         Ptr{LibPipeWire.pw_client}(proxy.handle),
         Base.unsafe_convert(Ptr{LibPipeWire.spa_hook}, listener),
@@ -887,9 +992,15 @@ end
 
 function _attach_metadata(proxy::Proxy, on_property)
     listener = Ref(_zero_hook())
-    events = Ref(LibPipeWire.pw_metadata_events(UInt32(0), _METADATA_PROPERTY[]))
+    events = Ref{LibPipeWire.pw_metadata_events}()
     callbacks = (on_property=on_property,)
     object = Metadata(proxy, ReentrantLock(), listener, events, callbacks, Ref{Any}(nothing), true)
+    try
+        events[] = _metadata_events(object)
+    catch
+        close(object)
+        rethrow()
+    end
     result = try
         _with_metadata_method(object, :add_listener) do data, method
             GC.@preserve object listener events @ccall $method(

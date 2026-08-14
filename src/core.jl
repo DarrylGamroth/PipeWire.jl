@@ -278,8 +278,10 @@ function _copy_core_info(pointer::Ptr{LibPipeWire.pw_core_info})
     )
 end
 
-function _core_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_core_info})::Cvoid
-    core = _callback_state(data, CoreConnection)
+function _core_info(
+    core::CoreConnection,
+    info::Ptr{LibPipeWire.pw_core_info},
+)::Cvoid
     try
         _invoke_core_callback(core, Val(:on_info), _copy_core_info(info))
     catch error
@@ -288,8 +290,7 @@ function _core_info(data::Ptr{Cvoid}, info::Ptr{LibPipeWire.pw_core_info})::Cvoi
     return nothing
 end
 
-function _core_done(data::Ptr{Cvoid}, id::UInt32, sequence::Cint)::Cvoid
-    core = _callback_state(data, CoreConnection)
+function _core_done(core::CoreConnection, id::UInt32, sequence::Cint)::Cvoid
     state = core.callback_state
     should_stop = lock(state.lock) do
         state.active && state.pending === sequence && (state.done = true)
@@ -299,20 +300,18 @@ function _core_done(data::Ptr{Cvoid}, id::UInt32, sequence::Cint)::Cvoid
     return nothing
 end
 
-function _core_ping(data::Ptr{Cvoid}, id::UInt32, sequence::Cint)::Cvoid
-    core = _callback_state(data, CoreConnection)
+function _core_ping(core::CoreConnection, id::UInt32, sequence::Cint)::Cvoid
     _invoke_core_callback(core, Val(:on_ping), id, sequence)
     return nothing
 end
 
 function _core_error(
-    data::Ptr{Cvoid},
+    core::CoreConnection,
     id::UInt32,
     sequence::Cint,
     result::Cint,
     message::Cstring,
 )::Cvoid
-    core = _callback_state(data, CoreConnection)
     state = core.callback_state
     detail = message == C_NULL ? nothing : unsafe_string(message)
     error = PipeWireError(:pw_core, result, detail)
@@ -324,43 +323,42 @@ function _core_error(
     return nothing
 end
 
-function _core_remove_id(data::Ptr{Cvoid}, id::UInt32)::Cvoid
-    core = _callback_state(data, CoreConnection)
+function _core_remove_id(core::CoreConnection, id::UInt32)::Cvoid
     _invoke_core_callback(core, Val(:on_remove_id), id)
     return nothing
 end
 
-function _core_bound_id(data::Ptr{Cvoid}, id::UInt32, global_id::UInt32)::Cvoid
-    core = _callback_state(data, CoreConnection)
+function _core_bound_id(
+    core::CoreConnection,
+    id::UInt32,
+    global_id::UInt32,
+)::Cvoid
     _invoke_core_callback(core, Val(:on_bound_id), id, global_id)
     return nothing
 end
 
 function _core_add_memory(
-    data::Ptr{Cvoid},
+    core::CoreConnection,
     id::UInt32,
     data_type::UInt32,
     fd::Cint,
     flags::UInt32,
 )::Cvoid
-    core = _callback_state(data, CoreConnection)
     _invoke_core_add_memory(core, id, data_type, fd, flags)
     return nothing
 end
 
-function _core_remove_memory(data::Ptr{Cvoid}, id::UInt32)::Cvoid
-    core = _callback_state(data, CoreConnection)
+function _core_remove_memory(core::CoreConnection, id::UInt32)::Cvoid
     _invoke_core_callback(core, Val(:on_remove_memory), id)
     return nothing
 end
 
 function _core_bound_properties(
-    data::Ptr{Cvoid},
+    core::CoreConnection,
     id::UInt32,
     global_id::UInt32,
     properties::Ptr{LibPipeWire.spa_dict},
 )::Cvoid
-    core = _callback_state(data, CoreConnection)
     try
         _invoke_core_callback(
             core,
@@ -375,30 +373,54 @@ function _core_bound_properties(
     return nothing
 end
 
-const _CORE_INFO = Ref{Ptr{Cvoid}}(C_NULL)
-const _CORE_DONE = Ref{Ptr{Cvoid}}(C_NULL)
-const _CORE_PING = Ref{Ptr{Cvoid}}(C_NULL)
-const _CORE_ERROR = Ref{Ptr{Cvoid}}(C_NULL)
-const _CORE_REMOVE_ID = Ref{Ptr{Cvoid}}(C_NULL)
-const _CORE_BOUND_ID = Ref{Ptr{Cvoid}}(C_NULL)
-const _CORE_ADD_MEMORY = Ref{Ptr{Cvoid}}(C_NULL)
-const _CORE_REMOVE_MEMORY = Ref{Ptr{Cvoid}}(C_NULL)
-const _CORE_BOUND_PROPERTIES = Ref{Ptr{Cvoid}}(C_NULL)
 const _REGISTRY_GLOBAL_ADDED = Ref{Ptr{Cvoid}}(C_NULL)
 const _REGISTRY_GLOBAL_REMOVED = Ref{Ptr{Cvoid}}(C_NULL)
 
-function _core_events()
+function _core_events(::T) where {T<:CoreConnection}
+    info = @cfunction(
+        _core_info,
+        Cvoid,
+        (Ref{T}, Ptr{LibPipeWire.pw_core_info}),
+    )
+    done = @cfunction(_core_done, Cvoid, (Ref{T}, UInt32, Cint))
+    ping = @cfunction(_core_ping, Cvoid, (Ref{T}, UInt32, Cint))
+    error = @cfunction(
+        _core_error,
+        Cvoid,
+        (Ref{T}, UInt32, Cint, Cint, Cstring),
+    )
+    remove_id = @cfunction(_core_remove_id, Cvoid, (Ref{T}, UInt32))
+    bound_id = @cfunction(
+        _core_bound_id,
+        Cvoid,
+        (Ref{T}, UInt32, UInt32),
+    )
+    add_memory = @cfunction(
+        _core_add_memory,
+        Cvoid,
+        (Ref{T}, UInt32, UInt32, Cint, UInt32),
+    )
+    remove_memory = @cfunction(
+        _core_remove_memory,
+        Cvoid,
+        (Ref{T}, UInt32),
+    )
+    bound_properties = @cfunction(
+        _core_bound_properties,
+        Cvoid,
+        (Ref{T}, UInt32, UInt32, Ptr{LibPipeWire.spa_dict}),
+    )
     return LibPipeWire.pw_core_events(
         UInt32(1),
-        _CORE_INFO[],
-        _CORE_DONE[],
-        _CORE_PING[],
-        _CORE_ERROR[],
-        _CORE_REMOVE_ID[],
-        _CORE_BOUND_ID[],
-        _CORE_ADD_MEMORY[],
-        _CORE_REMOVE_MEMORY[],
-        _CORE_BOUND_PROPERTIES[],
+        info,
+        done,
+        ping,
+        error,
+        remove_id,
+        bound_id,
+        add_memory,
+        remove_memory,
+        bound_properties,
     )
 end
 
@@ -468,7 +490,7 @@ function CoreConnection(
         on_bound_properties=on_bound_properties,
     )
     listener = Ref(_zero_hook())
-    events = Ref(_core_events())
+    events = Ref{LibPipeWire.pw_core_events}()
     core = CoreConnection(
         handle,
         context,
@@ -482,6 +504,12 @@ function CoreConnection(
         state,
         callbacks,
     )
+    try
+        events[] = _core_events(core)
+    catch
+        close(core)
+        rethrow()
+    end
     result = GC.@preserve core listener events begin
         LibPipeWire.pw_core_add_listener(
             handle,
@@ -894,40 +922,7 @@ function _registry_global_removed(data::Ptr{Cvoid}, id::UInt32)::Cvoid
     return nothing
 end
 
-function _initialize_callbacks!()
-    _CORE_INFO[] = @cfunction(
-        _core_info,
-        Cvoid,
-        (Ptr{Cvoid}, Ptr{LibPipeWire.pw_core_info}),
-    )
-    _CORE_DONE[] = @cfunction(_core_done, Cvoid, (Ptr{Cvoid}, UInt32, Cint))
-    _CORE_PING[] = @cfunction(_core_ping, Cvoid, (Ptr{Cvoid}, UInt32, Cint))
-    _CORE_ERROR[] = @cfunction(
-        _core_error,
-        Cvoid,
-        (Ptr{Cvoid}, UInt32, Cint, Cint, Cstring),
-    )
-    _CORE_REMOVE_ID[] = @cfunction(_core_remove_id, Cvoid, (Ptr{Cvoid}, UInt32))
-    _CORE_BOUND_ID[] = @cfunction(
-        _core_bound_id,
-        Cvoid,
-        (Ptr{Cvoid}, UInt32, UInt32),
-    )
-    _CORE_ADD_MEMORY[] = @cfunction(
-        _core_add_memory,
-        Cvoid,
-        (Ptr{Cvoid}, UInt32, UInt32, Cint, UInt32),
-    )
-    _CORE_REMOVE_MEMORY[] = @cfunction(
-        _core_remove_memory,
-        Cvoid,
-        (Ptr{Cvoid}, UInt32),
-    )
-    _CORE_BOUND_PROPERTIES[] = @cfunction(
-        _core_bound_properties,
-        Cvoid,
-        (Ptr{Cvoid}, UInt32, UInt32, Ptr{LibPipeWire.spa_dict}),
-    )
+function _initialize_registry_callbacks!()
     _REGISTRY_GLOBAL_ADDED[] = @cfunction(
         _registry_global_added,
         Cvoid,

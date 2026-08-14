@@ -44,8 +44,7 @@ function _invoke_proxy_callback(proxy::Proxy, ::Val{Field}, args...) where {Fiel
     return nothing
 end
 
-function _proxy_destroyed(data::Ptr{Cvoid})::Cvoid
-    proxy = _callback_state(data, Proxy)
+function _proxy_destroyed(proxy::Proxy)::Cvoid
     lock(proxy.callback_lock) do
         proxy.callbacks_active = false
     end
@@ -58,8 +57,7 @@ function _proxy_destroyed(data::Ptr{Cvoid})::Cvoid
     return nothing
 end
 
-function _proxy_bound(data::Ptr{Cvoid}, global_id::UInt32)::Cvoid
-    proxy = _callback_state(data, Proxy)
+function _proxy_bound(proxy::Proxy, global_id::UInt32)::Cvoid
     lock(proxy.callback_lock) do
         proxy.global_id = global_id
     end
@@ -67,8 +65,7 @@ function _proxy_bound(data::Ptr{Cvoid}, global_id::UInt32)::Cvoid
     return nothing
 end
 
-function _proxy_removed(data::Ptr{Cvoid})::Cvoid
-    proxy = _callback_state(data, Proxy)
+function _proxy_removed(proxy::Proxy)::Cvoid
     lock(proxy.callback_lock) do
         proxy.removed = true
     end
@@ -76,19 +73,17 @@ function _proxy_removed(data::Ptr{Cvoid})::Cvoid
     return nothing
 end
 
-function _proxy_done(data::Ptr{Cvoid}, sequence::Cint)::Cvoid
-    proxy = _callback_state(data, Proxy)
+function _proxy_done(proxy::Proxy, sequence::Cint)::Cvoid
     _invoke_proxy_callback(proxy, Val(:on_done), sequence)
     return nothing
 end
 
 function _proxy_error(
-    data::Ptr{Cvoid},
+    proxy::Proxy,
     sequence::Cint,
     result::Cint,
     message::Cstring,
 )::Cvoid
-    proxy = _callback_state(data, Proxy)
     detail = message == C_NULL ? nothing : unsafe_string(message)
     error = PipeWireError(:pw_proxy, result, detail)
     lock(proxy.callback_lock) do
@@ -99,11 +94,10 @@ function _proxy_error(
 end
 
 function _proxy_bound_properties(
-    data::Ptr{Cvoid},
+    proxy::Proxy,
     global_id::UInt32,
     properties::Ptr{LibPipeWire.spa_dict},
 )::Cvoid
-    proxy = _callback_state(data, Proxy)
     try
         _invoke_proxy_callback(
             proxy,
@@ -120,46 +114,35 @@ function _proxy_bound_properties(
     return nothing
 end
 
-const _PROXY_DESTROYED = Ref{Ptr{Cvoid}}(C_NULL)
-const _PROXY_BOUND = Ref{Ptr{Cvoid}}(C_NULL)
-const _PROXY_REMOVED = Ref{Ptr{Cvoid}}(C_NULL)
-const _PROXY_DONE = Ref{Ptr{Cvoid}}(C_NULL)
-const _PROXY_ERROR = Ref{Ptr{Cvoid}}(C_NULL)
-const _PROXY_BOUND_PROPERTIES = Ref{Ptr{Cvoid}}(C_NULL)
-
-function _initialize_proxy_callbacks!()
-    _PROXY_DESTROYED[] = @cfunction(_proxy_destroyed, Cvoid, (Ptr{Cvoid},))
-    _PROXY_BOUND[] = @cfunction(_proxy_bound, Cvoid, (Ptr{Cvoid}, UInt32))
-    _PROXY_REMOVED[] = @cfunction(_proxy_removed, Cvoid, (Ptr{Cvoid},))
-    _PROXY_DONE[] = @cfunction(_proxy_done, Cvoid, (Ptr{Cvoid}, Cint))
-    _PROXY_ERROR[] = @cfunction(
+function _proxy_events(::T) where {T<:Proxy}
+    destroyed = @cfunction(_proxy_destroyed, Cvoid, (Ref{T},))
+    bound = @cfunction(_proxy_bound, Cvoid, (Ref{T}, UInt32))
+    removed = @cfunction(_proxy_removed, Cvoid, (Ref{T},))
+    done = @cfunction(_proxy_done, Cvoid, (Ref{T}, Cint))
+    error = @cfunction(
         _proxy_error,
         Cvoid,
-        (Ptr{Cvoid}, Cint, Cint, Cstring),
+        (Ref{T}, Cint, Cint, Cstring),
     )
-    _PROXY_BOUND_PROPERTIES[] = @cfunction(
+    bound_properties = @cfunction(
         _proxy_bound_properties,
         Cvoid,
-        (Ptr{Cvoid}, UInt32, Ptr{LibPipeWire.spa_dict}),
+        (Ref{T}, UInt32, Ptr{LibPipeWire.spa_dict}),
     )
-    return nothing
-end
-
-function _proxy_events()
     return LibPipeWire.pw_proxy_events(
         UInt32(1),
-        _PROXY_DESTROYED[],
-        _PROXY_BOUND[],
-        _PROXY_REMOVED[],
-        _PROXY_DONE[],
-        _PROXY_ERROR[],
-        _PROXY_BOUND_PROPERTIES[],
+        destroyed,
+        bound,
+        removed,
+        done,
+        error,
+        bound_properties,
     )
 end
 
 function _new_proxy(handle, parent, interface_name::String, version::UInt32, callbacks)
     listener = Ref(_zero_hook())
-    events = Ref(_proxy_events())
+    events = Ref{LibPipeWire.pw_proxy_events}()
     proxy = Proxy(
         Ptr{LibPipeWire.pw_proxy}(handle),
         parent,
@@ -175,6 +158,14 @@ function _new_proxy(handle, parent, interface_name::String, version::UInt32, cal
         false,
         true,
     )
+    try
+        events[] = _proxy_events(proxy)
+    catch
+        LibPipeWire.pw_proxy_destroy(proxy.handle)
+        proxy.handle = Ptr{LibPipeWire.pw_proxy}(C_NULL)
+        _release_proxy(parent)
+        rethrow()
+    end
     GC.@preserve proxy listener events begin
         LibPipeWire.pw_proxy_add_listener(
             proxy.handle,
@@ -305,13 +296,7 @@ function create_object(
         on_error=on_error,
         on_bound_properties=on_bound_properties,
     )
-    try
-        return _new_proxy(handle, core, interface, UInt32(version), callbacks)
-    catch
-        LibPipeWire.pw_proxy_destroy(Ptr{LibPipeWire.pw_proxy}(handle))
-        _release_proxy(core)
-        rethrow()
-    end
+    return _new_proxy(handle, core, interface, UInt32(version), callbacks)
 end
 
 """

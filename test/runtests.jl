@@ -49,8 +49,8 @@ function (callback::BoundPropertiesRecorder)(
     return nothing
 end
 
-function invoke_process_callback(stream)
-    GC.@preserve stream PipeWire._stream_process(pointer_from_objref(stream))
+function invoke_process_callback(stream::T) where {T<:Stream}
+    ccall(stream.events[].process, Cvoid, (Ref{T},), stream)
     return nothing
 end
 
@@ -64,20 +64,23 @@ function dequeue_allocations(buffer, stream)
     return @allocated dequeue_buffer!(buffer, stream)
 end
 
-function invoke_core_scalar_callbacks(core)
+function invoke_core_scalar_callbacks(core::T) where {T<:CoreConnection}
+    events = core.events[]
     GC.@preserve core begin
-        data = pointer_from_objref(core)
-        PipeWire._core_ping(data, UInt32(11), Cint(12))
-        PipeWire._core_remove_id(data, UInt32(13))
-        PipeWire._core_bound_id(data, UInt32(14), UInt32(15))
-        PipeWire._core_add_memory(
-            data,
+        ccall(events.ping, Cvoid, (Ref{T}, UInt32, Cint), core, 11, 12)
+        ccall(events.remove_id, Cvoid, (Ref{T}, UInt32), core, 13)
+        ccall(events.bound_id, Cvoid, (Ref{T}, UInt32, UInt32), core, 14, 15)
+        ccall(
+            events.add_mem,
+            Cvoid,
+            (Ref{T}, UInt32, UInt32, Cint, UInt32),
+            core,
             UInt32(16),
             PipeWire.LibPipeWire.SPA_DATA_MemFd,
             Cint(17),
             UInt32(18),
         )
-        PipeWire._core_remove_memory(data, UInt32(16))
+        ccall(events.remove_mem, Cvoid, (Ref{T}, UInt32), core, 16)
     end
     return nothing
 end
@@ -85,6 +88,19 @@ end
 function core_scalar_callback_allocations(core)
     invoke_core_scalar_callbacks(core)
     return @allocated invoke_core_scalar_callbacks(core)
+end
+
+function invoke_core_bound_properties(core::T, dictionary) where {T<:CoreConnection}
+    ccall(
+        core.events[].bound_props,
+        Cvoid,
+        (Ref{T}, UInt32, UInt32, Ptr{PipeWire.LibPipeWire.spa_dict}),
+        core,
+        UInt32(19),
+        UInt32(20),
+        dictionary,
+    )
+    return nothing
 end
 
 @testset "Clang.jl-generated C bindings" begin
@@ -135,12 +151,7 @@ end
     @test removed_memory[] == 16
 
     PipeWire._with_properties_dict(Dict("object.path" => "test.core.bound")) do dictionary
-        GC.@preserve core PipeWire._core_bound_properties(
-            pointer_from_objref(core),
-            UInt32(19),
-            UInt32(20),
-            dictionary,
-        )
+        GC.@preserve core invoke_core_bound_properties(core, dictionary)
     end
     @test bound_properties[] == (
         UInt32(19),

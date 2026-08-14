@@ -5,7 +5,7 @@ using PipeWire
 struct FormatReporter end
 
 function (::FormatReporter)(::Stream, id::UInt32, parameter::Union{Nothing,Pod})
-    id == PipeWire.LibPipeWire.SPA_PARAM_Format || return nothing
+    id == SPA.PARAM_FORMAT || return nothing
     parameter === nothing && return nothing
     info = VideoInfoRaw(parameter)
     println(

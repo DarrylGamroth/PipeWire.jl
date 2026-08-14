@@ -144,9 +144,9 @@ fields = pod_value(SPA.Struct, record).values
 
 supported_rates = SPA.Choice(SPA.CHOICE_ENUM, Int32[48_000, 44_100, 96_000])
 format = SPA.Object(
-    PipeWire.LibPipeWire.SPA_TYPE_OBJECT_Format,
-    PipeWire.LibPipeWire.SPA_PARAM_EnumFormat,
-    SPA.Property(PipeWire.LibPipeWire.SPA_FORMAT_AUDIO_rate, supported_rates),
+    SPA.OBJECT_FORMAT,
+    SPA.PARAM_ENUM_FORMAT,
+    SPA.Property(SPA.FORMAT_AUDIO_RATE, supported_rates),
 )
 @assert pod_value(SPA.Object, Pod(format)) == format
 ```
@@ -183,7 +183,7 @@ format:
 ```julia
 stream = Stream(core, "capture"; on_param_changed=(stream, id, param) -> begin
     param === nothing && return
-    id == PipeWire.LibPipeWire.SPA_PARAM_Format || return
+    id == SPA.PARAM_FORMAT || return
     info = AudioInfoRaw(param)
     println(info.rate, " Hz, ", info.channels, " channels")
 end)
@@ -194,6 +194,23 @@ end)
 the native values, so values introduced by newer PipeWire versions remain
 representable. Common values can be compared with `UInt32(Audio.F32)`,
 `UInt32(Audio.FL)`, and `UInt32(Video.NV12)`.
+
+Standard SPA identifiers are public `UInt32` constants under `SPA`. They use
+the native names without the redundant `SPA_` prefix: `SPA.PARAM_PROPS`,
+`SPA.OBJECT_PROPS`, `SPA.PROP_VOLUME`, `SPA.FORMAT_AUDIO_RATE`,
+`SPA.MEDIA_TYPE_AUDIO`, `SPA.DATA_MEM_PTR`, `SPA.META_HEADER`, and
+`SPA.IO_BUFFERS`, for example. Node command and event IDs and all property keys
+used by the managed parameter builders follow the same convention. These
+values can be passed directly to `SPA.Object`, `SPA.Parameter`, `SPA.Property`,
+`subscribe_params!`, and related APIs, and compared directly with callback IDs.
+
+```julia
+volume = SPA.Parameter(
+    SPA.OBJECT_PROPS,
+    SPA.PARAM_PROPS,
+    SPA.Property(SPA.PROP_VOLUME, 0.75f0),
+)
+```
 
 `with_registry` connects to the default PipeWire daemon. For an embedded
 in-process core, use `with_registry(self=true)`. It also accepts an existing

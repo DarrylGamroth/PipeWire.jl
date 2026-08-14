@@ -6,6 +6,52 @@ function pod_value_allocations(::Type{T}, pod) where {T}
     return @allocated pod_value(T, pod)
 end
 
+@testset "public SPA identifiers" begin
+    identifiers = (
+        SPA.POD_OBJECT,
+        SPA.PARAM_PROPS,
+        SPA.OBJECT_PROPS,
+        SPA.MEDIA_TYPE_AUDIO,
+        SPA.MEDIA_SUBTYPE_RAW,
+        SPA.FORMAT_AUDIO_RATE,
+        SPA.PROP_VOLUME,
+        SPA.DATA_MEM_PTR,
+        SPA.META_HEADER,
+        SPA.META_TRANSFORM_90,
+        SPA.IO_BUFFERS,
+        SPA.BUFFERS_COUNT,
+        SPA.META_PARAM_TYPE,
+        SPA.IO_PARAM_ID,
+        SPA.LATENCY_DIRECTION,
+        SPA.PROCESS_LATENCY_NS,
+        SPA.PORT_CONFIG_MODE_DSP,
+        SPA.PORT_CONFIG_DIRECTION,
+        SPA.PROFILE_INDEX,
+        SPA.PROP_INFO_ID,
+        SPA.ROUTE_INDEX,
+        SPA.TAG_DIRECTION,
+        SPA.NODE_COMMAND_START,
+        SPA.NODE_EVENT_REQUEST_PROCESS,
+    )
+    @test all(identifier -> identifier isa UInt32, identifiers)
+    @test SPA.PARAM_PROPS == UInt32(2)
+    @test SPA.PARAM_FORMAT == UInt32(4)
+    @test SPA.OBJECT_PROPS == UInt32(0x0004_0002)
+
+    volume = @inferred SPA.Property(SPA.PROP_VOLUME, 0.5f0)
+    parameter = @inferred SPA.Parameter(SPA.OBJECT_PROPS, SPA.PARAM_PROPS, volume)
+    @test parameter.object.id == SPA.PARAM_PROPS
+    @test parameter.object.type == SPA.OBJECT_PROPS
+
+    readme = read(joinpath(@__DIR__, "..", "README.md"), String)
+    @test !occursin("PipeWire.LibPipeWire.SPA_", readme)
+    examples = (
+        joinpath(@__DIR__, "..", "examples", "audio_sine.jl"),
+        joinpath(@__DIR__, "..", "examples", "video_capture.jl"),
+    )
+    @test all(path -> !occursin("PipeWire.LibPipeWire", read(path, String)), examples)
+end
+
 
 @testset "scalar SPA POD values" begin
     scalar_values = (

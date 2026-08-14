@@ -62,6 +62,8 @@ export Array,
     Sequence,
     Struct
 
+include("spa_ids.jl")
+
 "An enumerated SPA POD ID."
 struct Id
     value::UInt32

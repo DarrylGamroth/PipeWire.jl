@@ -166,6 +166,13 @@ callable and a reusable `StreamBuffer` therefore keep the steady-state process
 callback allocation-free after warmup. Do not request `RT_PROCESS`: Julia
 callbacks are not hard-real-time safe.
 
+The managed event surface also includes control, I/O, parameter, buffer,
+drain, command, and trigger-completion notifications. `StreamControl` and
+`StreamTime` are owned snapshots; `StreamIO` is borrowed for the duration of
+its callback. Stream properties, parameters, controls, timing, error state,
+adaptive rate, graph-driving state, and SPA event emission have corresponding
+managed methods.
+
 ```julia
 using PipeWire
 

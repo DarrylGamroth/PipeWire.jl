@@ -54,6 +54,40 @@ function invoke_process_callback(stream::T) where {T<:Stream}
     return nothing
 end
 
+function invoke_stream_extended_callbacks(
+    stream::T,
+    control::Ptr{PipeWire.LibPipeWire.pw_stream_control},
+    command::Ptr{PipeWire.LibPipeWire.spa_command},
+) where {T<:Stream}
+    events = getfield(stream, :events)[]
+    ccall(
+        events.control_info,
+        Cvoid,
+        (Ref{T}, UInt32, Ptr{PipeWire.LibPipeWire.pw_stream_control}),
+        stream,
+        UInt32(3),
+        control,
+    )
+    ccall(
+        events.io_changed,
+        Cvoid,
+        (Ref{T}, UInt32, Ptr{Cvoid}, UInt32),
+        stream,
+        UInt32(4),
+        Ptr{Cvoid}(UInt(0x1234)),
+        UInt32(64),
+    )
+    ccall(
+        events.command,
+        Cvoid,
+        (Ref{T}, Ptr{PipeWire.LibPipeWire.spa_command}),
+        stream,
+        command,
+    )
+    ccall(events.trigger_done, Cvoid, (Ref{T},), stream)
+    return nothing
+end
+
 function callback_allocations(stream)
     invoke_process_callback(stream)
     return @allocated invoke_process_callback(stream)
@@ -509,30 +543,94 @@ include("filter.jl")
     core = CoreConnection(context; self=true, properties=connection_properties)
     @test isopen(connection_properties)
 
-    stream_properties = Properties(Dict("media.type" => "Audio"))
+    properties = Properties(Dict("media.type" => "Audio"))
     state_changes = Tuple{Int32,Int32,Union{Nothing,String}}[]
+    control_changes = Tuple{UInt32,Union{Nothing,StreamControl}}[]
+    io_changes = StreamIO[]
+    commands = Pod[]
+    trigger_count = Ref(0)
     process_count = Ref(0)
     stream = Stream(
         core,
         "julia-test";
-        properties=stream_properties,
+        properties=properties,
         on_state_changed=(stream, old, current, detail) ->
             push!(state_changes, (old, current, detail)),
+        on_control_info=(stream, id, control) -> push!(control_changes, (id, control)),
+        on_io_changed=(stream, io) -> push!(io_changes, io),
+        on_command=(stream, command) -> push!(commands, command),
+        on_trigger_done=(stream) -> (trigger_count[] += 1),
         on_process=CountProcess(process_count),
     )
-    @test isopen(stream_properties)
+    @test isopen(properties)
     @test isopen(stream)
     @test main_loop(stream) === main_loop(core)
     @test isconcretetype(typeof(stream))
     @test all(isconcretetype, fieldtypes(typeof(stream)))
+    @test all(isconcretetype, fieldtypes(StreamControl))
+    @test all(isconcretetype, fieldtypes(StreamIO))
+    @test all(isconcretetype, fieldtypes(StreamTime))
     @test callback_allocations(stream) == 0
     @test process_count[] == 2
     @test stream_state(stream) == PipeWire.LibPipeWire.PW_STREAM_STATE_UNCONNECTED
+    @test stream_name(stream) == "julia-test"
+    @test stream_properties(stream)["media.type"] == "Audio"
+    @test update_properties!(stream, Dict("media.role" => "Test")) === stream
+    @test stream_properties(stream)["media.role"] == "Test"
+    @test update_params!(stream, ()) === stream
+    @test stream_control(stream, 0) === nothing
+    @test stream_nsec(stream) isa UInt64
+    @test !is_driving(stream)
+    @test !is_lazy(stream)
+    @test_throws PipeWireError stream_time(stream)
+    @test_throws ArgumentError set_param!(stream, -1, nothing)
+    @test_throws ArgumentError set_control!(stream, -1, 0.5)
+    @test_throws ArgumentError set_rate!(stream, NaN)
+    @test_throws ArgumentError set_error!(stream, 0, "not negative")
+    @test_throws ArgumentError emit_event!(stream, Pod(Int32(1)))
+
+    control_name = "Volume"
+    control_values = Float32[0.25, 0.5]
+    native_control = Ref(
+        PipeWire.LibPipeWire.pw_stream_control(
+            pointer(control_name),
+            UInt32(0),
+            0.5f0,
+            0.0f0,
+            1.0f0,
+            pointer(control_values),
+            UInt32(length(control_values)),
+            UInt32(8),
+        ),
+    )
+    command = Pod(Int32(7))
+    GC.@preserve stream control_name control_values native_control command begin
+        invoke_stream_extended_callbacks(
+            stream,
+            Base.unsafe_convert(Ptr{PipeWire.LibPipeWire.pw_stream_control}, native_control),
+            Ptr{PipeWire.LibPipeWire.spa_command}(PipeWire._pod_pointer(command)),
+        )
+    end
+    @test control_changes == [
+        (
+            UInt32(3),
+            StreamControl("Volume", UInt32(0), 0.5f0, 0.0f0, 1.0f0, control_values, 8),
+        ),
+    ]
+    @test io_changes == [StreamIO(UInt32(4), Ptr{Cvoid}(UInt(0x1234)), UInt32(64))]
+    @test length(commands) == 1
+    @test pod_value(Int32, commands[1]) == 7
+    @test trigger_count[] == 1
     @test_throws InvalidStateException close(core)
     @test_throws ArgumentError connect!(
         stream,
         :output;
         flags=PipeWire.LibPipeWire.PW_STREAM_FLAG_RT_PROCESS,
+    )
+    @test_throws ArgumentError connect!(
+        stream,
+        :output;
+        flags=PipeWire.LibPipeWire.PW_STREAM_FLAG_RT_TRIGGER_DONE,
     )
     @test_throws ArgumentError connect!(stream, :sideways)
     @test dequeue_buffer(stream) === nothing
@@ -601,7 +699,7 @@ include("filter.jl")
     close(stream)
     @test !isopen(stream)
     close(stream)
-    close(stream_properties)
+    close(properties)
     close(connection_properties)
     close(core)
     close(context)

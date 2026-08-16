@@ -66,6 +66,11 @@ function filter_header_allocations(buffer)
     return @allocated buffer_header(buffer)
 end
 
+function set_filter_header_allocations(buffer, header)
+    set_buffer_header!(buffer, header)
+    return @allocated set_buffer_header!(buffer, header)
+end
+
 @testset "managed filter" begin
     context = Context()
     core = CoreConnection(context; self=true)
@@ -422,6 +427,49 @@ end
         @test @inferred(Union{Nothing,BufferHeader}, buffer_header(buffer)) ==
               BufferHeader(SPA.META_HEADER_FLAG_MARKER, 6, 7, -8, 9)
         @test filter_header_allocations(buffer) == 0
+        replacement = BufferHeader(SPA.META_HEADER_FLAG_CORRUPTED, 10, 11, -12, 13)
+        @test set_buffer_header!(buffer, replacement) === buffer
+        @test buffer_header(buffer) == replacement
+        @test header[] == PipeWire.LibPipeWire.spa_meta_header(
+            SPA.META_HEADER_FLAG_CORRUPTED,
+            10,
+            11,
+            -12,
+            13,
+        )
+        @test set_filter_header_allocations(buffer, replacement) == 0
+
+        metas[1] = PipeWire.LibPipeWire.spa_meta(
+            SPA.META_HEADER,
+            UInt32(sizeof(PipeWire.LibPipeWire.spa_meta_header) - 1),
+            Base.unsafe_convert(Ptr{Cvoid}, header),
+        )
+        @test_throws InvalidStateException set_buffer_header!(buffer, replacement)
+        metas[1] = PipeWire.LibPipeWire.spa_meta(
+            SPA.META_HEADER,
+            UInt32(sizeof(PipeWire.LibPipeWire.spa_meta_header)),
+            C_NULL,
+        )
+        @test_throws InvalidStateException set_buffer_header!(buffer, replacement)
+        spa_buffer[] = PipeWire.LibPipeWire.spa_buffer(
+            UInt32(0),
+            UInt32(1),
+            C_NULL,
+            Base.unsafe_convert(Ptr{PipeWire.LibPipeWire.spa_data}, native_data),
+        )
+        @test_throws InvalidStateException set_buffer_header!(buffer, replacement)
+
+        metas[1] = PipeWire.LibPipeWire.spa_meta(
+            SPA.META_HEADER,
+            UInt32(sizeof(PipeWire.LibPipeWire.spa_meta_header)),
+            Base.unsafe_convert(Ptr{Cvoid}, header),
+        )
+        spa_buffer[] = PipeWire.LibPipeWire.spa_buffer(
+            UInt32(length(metas)),
+            UInt32(1),
+            pointer(metas),
+            Base.unsafe_convert(Ptr{PipeWire.LibPipeWire.spa_data}, native_data),
+        )
         @test buffer_metadata(buffer, SPA.META_BUSY) === nothing
         @test data_type(data) == SPA.DATA_MEM_PTR
         @test data_flags(data) == SPA.DATA_FLAG_READWRITE

@@ -712,7 +712,13 @@ function flush!(filter::Filter; drain::Bool=false)
     return filter
 end
 
-"Request processing for a trigger-driven filter and return it."
+"""
+    trigger_process!(filter)
+
+Request one graph-processing iteration and return `filter`. A driver filter
+must trigger periodically while it is driving; one call is not a durable queue
+of future iterations.
+"""
 function trigger_process!(filter::Filter)
     _check_callback_error(filter)
     result = lock(filter.state_lock) do

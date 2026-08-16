@@ -982,6 +982,9 @@ include("examples.jl")
         @test length(metadata_bytes(buffer_metadata(borrowed, 1))) ==
               sizeof(PipeWire.LibPipeWire.spa_meta_header)
         @test buffer_header(borrowed) == BufferHeader(5, 6, 7, -8, 9)
+        replacement_header = BufferHeader(10, 11, 12, -13, 14)
+        @test set_buffer_header!(borrowed, replacement_header) === borrowed
+        @test buffer_header(borrowed) == replacement_header
         @test video_crop(borrowed) == BufferRegion(10, 11, 12, 13)
         @test video_damage(borrowed) == [BufferRegion(1, 2, 3, 4)]
         @test video_transform(borrowed) == 2

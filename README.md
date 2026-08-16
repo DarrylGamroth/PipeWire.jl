@@ -324,6 +324,8 @@ and `close`; DMA-BUF synchronization remains the application's responsibility.
 Data access masks are public as `SPA.DATA_FLAG_READABLE`,
 `SPA.DATA_FLAG_WRITABLE`, `SPA.DATA_FLAG_DYNAMIC`,
 `SPA.DATA_FLAG_READWRITE`, and `SPA.DATA_FLAG_MAPPABLE`.
+Use `set_buffer_header!(buffer, BufferHeader(...))` to replace an existing
+complete `SPA_META_Header` payload without crossing into native bindings.
 With `STREAM_ALLOC_BUFFERS`, call `allocate_buffer!` from `on_buffer_added` to
 install Julia-owned `MemPtr` planes. The stream roots those allocations until
 PipeWire removes the corresponding native buffer.
@@ -389,6 +391,16 @@ use `RT_PROCESS`. A port created with `FILTER_PORT_ALLOC_BUFFERS` can call
 `allocate_buffer!(port, buffer, sizes)` from `on_buffer_added`; its filter owns
 that Julia storage until PipeWire reports the buffer removed. Filters can also
 send managed `SPA.Event` values with `emit_event!`.
+
+A filter connected with `FILTER_DRIVER` must call `trigger_process!`
+periodically while `is_driving(filter)` is true. Use a loop timer or another
+real graph cadence: each call requests one iteration and does not enqueue an
+arbitrary number of future iterations. `FILTER_ASYNC` needs no separate buffer
+publication API; continue to dequeue and queue from the managed process
+callback. When every queued output must be consumed before its buffer is
+recycled, PipeWire 1.6 or newer provides reliable transport. Set
+`properties=Dict("node.reliable" => "true")` when constructing the filter;
+older PipeWire servers do not implement that guarantee.
 
 ```julia
 context = Context()

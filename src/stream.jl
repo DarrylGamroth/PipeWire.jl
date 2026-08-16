@@ -1012,6 +1012,37 @@ function buffer_header(buffer::AbstractPipeWireBuffer)
     )
 end
 
+"""
+    set_buffer_header!(buffer, header)
+
+Overwrite the existing SPA header metadata on an available PipeWire buffer.
+The buffer must contain a complete, writable `SPA_META_Header` payload.
+"""
+function set_buffer_header!(buffer::AbstractPipeWireBuffer, header::BufferHeader)
+    metadata = buffer_metadata(buffer, LibPipeWire.SPA_META_Header)
+    metadata === nothing && throw(
+        InvalidStateException("the PipeWire buffer has no header metadata", :no_metadata),
+    )
+    native = _native_metadata(metadata)
+    native.size >= sizeof(LibPipeWire.spa_meta_header) || throw(
+        InvalidStateException("the buffer metadata payload is truncated", :truncated),
+    )
+    native.data == C_NULL && throw(
+        InvalidStateException("the buffer metadata payload is unavailable", :unavailable),
+    )
+    unsafe_store!(
+        Ptr{LibPipeWire.spa_meta_header}(native.data),
+        LibPipeWire.spa_meta_header(
+            header.flags,
+            header.offset,
+            header.pts,
+            header.dts_offset,
+            header.sequence,
+        ),
+    )
+    return buffer
+end
+
 function _buffer_region(native::LibPipeWire.spa_meta_region)
     return BufferRegion(
         native.region.position.x,

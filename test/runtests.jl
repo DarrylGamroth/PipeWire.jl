@@ -743,8 +743,11 @@ include("examples.jl")
     @test all(isconcretetype, fieldtypes(StreamControl))
     @test all(isconcretetype, fieldtypes(StreamIO))
     @test all(isconcretetype, fieldtypes(StreamTime))
+    @test StreamBufferInfo === BufferInfo
     @test all(isconcretetype, fieldtypes(StreamBufferInfo))
     @test all(isconcretetype, fieldtypes(StreamMetadata))
+    @test StreamMetadata === BufferMetadata{StreamBuffer}
+    @test MappedStreamData === MappedBufferData{StreamData}
     @test all(isconcretetype, fieldtypes(BufferChunk))
     @test isbitstype(BufferChunk)
     @test all(isconcretetype, fieldtypes(BufferHeader))
@@ -990,7 +993,7 @@ include("examples.jl")
         @test hash(bitmap) == hash(same_bitmap)
         @test buffer_metadata(borrowed, UInt32(500)) === nothing
         @test data_type(data) == PipeWire.LibPipeWire.SPA_DATA_MemPtr
-        @test data_flags(data) == 0
+        @test data_flags(data) == SPA.DATA_FLAG_NONE
         @test data_fd(data) == -1
         @test data_map_offset(data) == 0
         @test is_mapped(data)
@@ -1016,7 +1019,7 @@ include("examples.jl")
         @test length(allocated) == 1
         @test length(allocated[1]) == 32
         @test data_type(data) == PipeWire.LibPipeWire.SPA_DATA_MemPtr
-        @test data_flags(data) == 3
+        @test data_flags(data) == SPA.DATA_FLAG_READWRITE
         @test data_pointer(data) == pointer(allocated[1])
     end
 
@@ -1031,7 +1034,7 @@ include("examples.jl")
         file_data = Ref(
             PipeWire.LibPipeWire.spa_data(
                 PipeWire.LibPipeWire.SPA_DATA_MemFd,
-                UInt32(3),
+                SPA.DATA_FLAG_READWRITE,
                 Int64(file_descriptor),
                 UInt32(0),
                 UInt32(4096),

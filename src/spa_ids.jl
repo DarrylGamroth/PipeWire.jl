@@ -242,6 +242,14 @@ end
     DATA_SYNC_OBJECT = LibPipeWire.SPA_DATA_SyncObj
 end
 
+# Access flags stored in `spa_data.flags`.
+const DATA_FLAG_NONE = UInt32(0)
+const DATA_FLAG_READABLE = UInt32(1 << 0)
+const DATA_FLAG_WRITABLE = UInt32(1 << 1)
+const DATA_FLAG_DYNAMIC = UInt32(1 << 2)
+const DATA_FLAG_READWRITE = DATA_FLAG_READABLE | DATA_FLAG_WRITABLE
+const DATA_FLAG_MAPPABLE = UInt32(1 << 3)
+
 # Metadata types attached to SPA buffers.
 @_spa_ids begin
     META_INVALID = LibPipeWire.SPA_META_Invalid

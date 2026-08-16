@@ -4,6 +4,9 @@ const STREAM_AUTOCONNECT = LibPipeWire.PW_STREAM_FLAG_AUTOCONNECT
 const STREAM_INACTIVE = LibPipeWire.PW_STREAM_FLAG_INACTIVE
 "Request memory-mapped stream buffers."
 const STREAM_MAP_BUFFERS = LibPipeWire.PW_STREAM_FLAG_MAP_BUFFERS
+
+abstract type AbstractPipeWireBuffer end
+abstract type AbstractPipeWireData end
 "Make a stream a graph driver when permitted."
 const STREAM_DRIVER = LibPipeWire.PW_STREAM_FLAG_DRIVER
 "Disable format conversion for a stream."
@@ -130,7 +133,7 @@ mutable struct Stream{CoreType<:CoreConnection,Callbacks}
     events::Base.RefValue{LibPipeWire.pw_stream_events}
     callbacks::Callbacks
     callback_error::Base.RefValue{Any}
-    buffer_owners::Dict{Ptr{LibPipeWire.pw_buffer},Any}
+    buffer_owners::Dict{Ptr{LibPipeWire.pw_buffer},Vector{Vector{UInt8}}}
     callbacks_active::Bool
     connected::Bool
 end
@@ -376,7 +379,7 @@ function Stream(
         events,
         callbacks,
         Ref{Any}(nothing),
-        Dict{Ptr{LibPipeWire.pw_buffer},Any}(),
+        Dict{Ptr{LibPipeWire.pw_buffer},Vector{Vector{UInt8}}}(),
         true,
         false,
     )
@@ -780,25 +783,29 @@ A dequeued, borrowed PipeWire stream buffer. Exactly one of
 called before the buffer can be dequeued again. Construct `StreamBuffer()` once
 and use [`dequeue_buffer!`](@ref) to avoid allocations in a process callback.
 """
-mutable struct StreamBuffer
+mutable struct StreamBuffer <: AbstractPipeWireBuffer
     handle::Ptr{LibPipeWire.pw_buffer}
 end
 
 StreamBuffer() = StreamBuffer(Ptr{LibPipeWire.pw_buffer}(C_NULL))
 
-"A concrete snapshot of the fields attached to a PipeWire stream buffer."
-struct StreamBufferInfo
+"A concrete snapshot of the accounting fields attached to a PipeWire buffer."
+struct BufferInfo
     user_data::Ptr{Cvoid}
     size::UInt64
     requested::UInt64
     time::UInt64
 end
 
-"A borrowed metadata entry belonging to a [`StreamBuffer`](@ref)."
-struct StreamMetadata
-    buffer::StreamBuffer
+const StreamBufferInfo = BufferInfo
+
+"A borrowed metadata entry belonging to a PipeWire buffer."
+struct BufferMetadata{BufferType<:AbstractPipeWireBuffer}
+    buffer::BufferType
     index::Int
 end
+
+const StreamMetadata = BufferMetadata{StreamBuffer}
 
 "An owned snapshot of a SPA buffer chunk."
 struct BufferChunk
@@ -904,23 +911,23 @@ function _require_available(buffer::StreamBuffer)
     return buffer.handle
 end
 
-function _spa_buffer(buffer::StreamBuffer)
+function _spa_buffer(buffer::AbstractPipeWireBuffer)
     pointer = unsafe_load(_require_available(buffer)).buffer
     pointer == C_NULL &&
-        throw(InvalidStateException("the stream buffer has no SPA buffer", :no_buffer))
+        throw(InvalidStateException("the PipeWire buffer has no SPA buffer", :no_buffer))
     return pointer
 end
 
-"Copy the mutable accounting fields attached to a stream buffer."
-function buffer_info(buffer::StreamBuffer)
+"Copy the mutable accounting fields attached to a PipeWire buffer."
+function buffer_info(buffer::AbstractPipeWireBuffer)
     native = unsafe_load(_require_available(buffer))
-    return StreamBufferInfo(native.user_data, native.size, native.requested, native.time)
+    return BufferInfo(native.user_data, native.size, native.requested, native.time)
 end
 
-"Set the application-defined size accounting field on a dequeued buffer."
-function set_buffer_size!(buffer::StreamBuffer, size::Integer)
+"Set the application-defined size accounting field on an available buffer."
+function set_buffer_size!(buffer::AbstractPipeWireBuffer, size::Integer)
     0 <= size <= typemax(UInt64) ||
-        throw(ArgumentError("stream buffer size is outside UInt64 range"))
+        throw(ArgumentError("buffer size is outside UInt64 range"))
     pointer = _require_available(buffer)
     native = unsafe_load(pointer)
     unsafe_store!(
@@ -936,60 +943,60 @@ function set_buffer_size!(buffer::StreamBuffer, size::Integer)
     return buffer
 end
 
-"Return the number of metadata entries attached to a stream buffer."
-metadata_count(buffer::StreamBuffer) = Int(unsafe_load(_spa_buffer(buffer)).n_metas)
+"Return the number of metadata entries attached to a PipeWire buffer."
+metadata_count(buffer::AbstractPipeWireBuffer) = Int(unsafe_load(_spa_buffer(buffer)).n_metas)
 
 "Return a borrowed metadata entry by one-based index."
-function buffer_metadata(buffer::StreamBuffer, index::Integer)
+function buffer_metadata(buffer::AbstractPipeWireBuffer, index::Integer)
     count = metadata_count(buffer)
     1 <= index <= count || throw(BoundsError(1:count, index))
-    return StreamMetadata(buffer, Int(index))
+    return BufferMetadata(buffer, Int(index))
 end
 
 "Return the first borrowed metadata entry of `type`, or `nothing`."
-function buffer_metadata(buffer::StreamBuffer, type::UInt32)
+function buffer_metadata(buffer::AbstractPipeWireBuffer, type::UInt32)
     count = metadata_count(buffer)
     for index in 1:count
-        metadata = StreamMetadata(buffer, index)
+        metadata = BufferMetadata(buffer, index)
         metadata_type(metadata) == type && return metadata
     end
     return nothing
 end
 
-function _native_metadata(metadata::StreamMetadata)
+function _native_metadata(metadata::BufferMetadata)
     buffer = unsafe_load(_spa_buffer(metadata.buffer))
     1 <= metadata.index <= Int(buffer.n_metas) ||
         throw(InvalidStateException("the metadata entry is unavailable", :unavailable))
     buffer.metas == C_NULL &&
-        throw(InvalidStateException("the stream buffer has no metadata array", :no_metadata))
+        throw(InvalidStateException("the PipeWire buffer has no metadata array", :no_metadata))
     return unsafe_load(buffer.metas, metadata.index)
 end
 
-metadata_type(metadata::StreamMetadata) = _native_metadata(metadata).type
-metadata_size(metadata::StreamMetadata) = Int(_native_metadata(metadata).size)
-metadata_pointer(metadata::StreamMetadata) = _native_metadata(metadata).data
+metadata_type(metadata::BufferMetadata) = _native_metadata(metadata).type
+metadata_size(metadata::BufferMetadata) = Int(_native_metadata(metadata).size)
+metadata_pointer(metadata::BufferMetadata) = _native_metadata(metadata).data
 
 "Return a borrowed byte view of a metadata payload."
-function metadata_bytes(metadata::StreamMetadata)
+function metadata_bytes(metadata::BufferMetadata)
     native = _native_metadata(metadata)
     native.data == C_NULL && return UInt8[]
     return unsafe_wrap(Vector{UInt8}, Ptr{UInt8}(native.data), Int(native.size); own=false)
 end
 
-function _typed_metadata(buffer::StreamBuffer, type::UInt32, ::Type{T}) where {T}
+function _typed_metadata(buffer::AbstractPipeWireBuffer, type::UInt32, ::Type{T}) where {T}
     metadata = buffer_metadata(buffer, type)
     metadata === nothing && return nothing
     native = _native_metadata(metadata)
     native.size >= sizeof(T) || throw(
-        InvalidStateException("the stream metadata payload is truncated", :truncated),
+        InvalidStateException("the buffer metadata payload is truncated", :truncated),
     )
     native.data == C_NULL &&
-        throw(InvalidStateException("the stream metadata payload is unavailable", :unavailable))
+        throw(InvalidStateException("the buffer metadata payload is unavailable", :unavailable))
     return unsafe_load(Ptr{T}(native.data))
 end
 
 "Return copied SPA header metadata, or `nothing` when absent."
-function buffer_header(buffer::StreamBuffer)
+function buffer_header(buffer::AbstractPipeWireBuffer)
     native = _typed_metadata(
         buffer,
         LibPipeWire.SPA_META_Header,
@@ -1015,7 +1022,7 @@ function _buffer_region(native::LibPipeWire.spa_meta_region)
 end
 
 "Return copied video-crop metadata, or `nothing` when absent."
-function video_crop(buffer::StreamBuffer)
+function video_crop(buffer::AbstractPipeWireBuffer)
     native = _typed_metadata(
         buffer,
         LibPipeWire.SPA_META_VideoCrop,
@@ -1025,7 +1032,7 @@ function video_crop(buffer::StreamBuffer)
 end
 
 "Return all valid copied video-damage regions."
-function video_damage(buffer::StreamBuffer)
+function video_damage(buffer::AbstractPipeWireBuffer)
     metadata = buffer_metadata(buffer, LibPipeWire.SPA_META_VideoDamage)
     metadata === nothing && return BufferRegion[]
     native = _native_metadata(metadata)
@@ -1072,7 +1079,7 @@ function _copy_buffer_bitmap(pointer::Ptr{Cvoid}, available::Int)
 end
 
 "Return copied inline-bitmap metadata, or `nothing` when absent."
-function buffer_bitmap(buffer::StreamBuffer)
+function buffer_bitmap(buffer::AbstractPipeWireBuffer)
     metadata = buffer_metadata(buffer, LibPipeWire.SPA_META_Bitmap)
     metadata === nothing && return nothing
     native = _native_metadata(metadata)
@@ -1082,7 +1089,7 @@ function buffer_bitmap(buffer::StreamBuffer)
 end
 
 "Return copied cursor metadata, or `nothing` when absent."
-function buffer_cursor(buffer::StreamBuffer)
+function buffer_cursor(buffer::AbstractPipeWireBuffer)
     metadata = buffer_metadata(buffer, LibPipeWire.SPA_META_Cursor)
     metadata === nothing && return nothing
     native = _native_metadata(metadata)
@@ -1115,7 +1122,7 @@ function buffer_cursor(buffer::StreamBuffer)
 end
 
 "Return copied timed-control sequence metadata, or `nothing` when absent."
-function buffer_control(buffer::StreamBuffer)
+function buffer_control(buffer::AbstractPipeWireBuffer)
     metadata = buffer_metadata(buffer, LibPipeWire.SPA_META_Control)
     metadata === nothing && return nothing
     native = _native_metadata(metadata)
@@ -1132,7 +1139,7 @@ function buffer_control(buffer::StreamBuffer)
 end
 
 "Return copied buffer-busy metadata, or `nothing` when absent."
-function buffer_busy(buffer::StreamBuffer)
+function buffer_busy(buffer::AbstractPipeWireBuffer)
     native = _typed_metadata(
         buffer,
         LibPipeWire.SPA_META_Busy,
@@ -1142,7 +1149,7 @@ function buffer_busy(buffer::StreamBuffer)
 end
 
 "Return copied video-transform metadata, or `nothing` when absent."
-function video_transform(buffer::StreamBuffer)
+function video_transform(buffer::AbstractPipeWireBuffer)
     native = _typed_metadata(
         buffer,
         LibPipeWire.SPA_META_VideoTransform,
@@ -1152,7 +1159,7 @@ function video_transform(buffer::StreamBuffer)
 end
 
 "Return copied explicit-sync timeline metadata, or `nothing` when absent."
-function sync_timeline(buffer::StreamBuffer)
+function sync_timeline(buffer::AbstractPipeWireBuffer)
     native = _typed_metadata(
         buffer,
         LibPipeWire.SPA_META_SyncTimeline,
@@ -1218,17 +1225,19 @@ return_buffer!(buffer::StreamBuffer, stream::Stream) =
     _return_stream_buffer!(LibPipeWire.pw_stream_return_buffer, buffer, stream)
 
 """A borrowed data plane belonging to a [`StreamBuffer`](@ref)."""
-struct StreamData
+struct StreamData <: AbstractPipeWireData
     buffer::StreamBuffer
     index::Int
 end
 
-"An explicitly memory-mapped stream data plane."
-mutable struct MappedStreamData
+"An explicitly memory-mapped PipeWire data plane."
+mutable struct MappedBufferData{DataType<:AbstractPipeWireData}
     pointer::Ptr{UInt8}
     length::Int
-    data::StreamData
+    data::DataType
 end
+
+const MappedStreamData = MappedBufferData{StreamData}
 
 "Return a borrowed data-plane view from a dequeued stream buffer."
 function buffer_data(buffer::StreamBuffer, index::Integer=1)
@@ -1245,51 +1254,43 @@ function _native_data(data::StreamData)
     return unsafe_load(buffer.datas, data.index)
 end
 
-"Return the SPA memory type for a stream data plane."
-data_type(data::StreamData) = _native_data(data).type
-"Return the SPA memory flags for a stream data plane."
-data_flags(data::StreamData) = _native_data(data).flags
-"Return the file descriptor for a stream data plane, or `-1` when absent."
-data_fd(data::StreamData) = _native_data(data).fd
+"Return the SPA memory type for a PipeWire data plane."
+data_type(data::AbstractPipeWireData) = _native_data(data).type
+"Return the SPA memory flags for a PipeWire data plane."
+data_flags(data::AbstractPipeWireData) = _native_data(data).flags
+"Return the file descriptor for a PipeWire data plane, or `-1` when absent."
+data_fd(data::AbstractPipeWireData) = _native_data(data).fd
 "Return the page-aligned mapping offset for a file-backed data plane."
-data_map_offset(data::StreamData) = _native_data(data).mapoffset
-"Return whether a stream data plane already has a native memory mapping."
-is_mapped(data::StreamData) = _native_data(data).data != C_NULL
+data_map_offset(data::AbstractPipeWireData) = _native_data(data).mapoffset
+"Return whether a PipeWire data plane already has a native memory mapping."
+is_mapped(data::AbstractPipeWireData) = _native_data(data).data != C_NULL
 
-"""
-    allocate_buffer!(stream, buffer, sizes; flags=0x3)
-
-Allocate Julia-owned `MemPtr` storage for every native data plane in `buffer`.
-Call this from `on_buffer_added` when connecting with
-[`STREAM_ALLOC_BUFFERS`](@ref). The stream roots the storage until the native
-buffer is removed. `buffer` is the raw pointer supplied to that callback.
-"""
-function allocate_buffer!(
-    stream::Stream,
-    buffer::Ptr{LibPipeWire.pw_buffer},
-    sizes;
-    flags::Integer=UInt32(3),
-)
-    buffer == C_NULL && throw(ArgumentError("the native stream buffer is null"))
-    native_flags = _core_uint32(flags, "buffer data flags")
+function _allocation_sizes(sizes)
     requested_sizes = Int[]
     for size in sizes
         0 <= size <= typemax(UInt32) ||
             throw(ArgumentError("buffer data size is outside UInt32 range"))
         push!(requested_sizes, Int(size))
     end
-    lock(stream.state_lock)
+    return requested_sizes
+end
+
+function _allocate_buffer!(owner, target, buffer, sizes, flags)
+    buffer == C_NULL && throw(ArgumentError("the native PipeWire buffer is null"))
+    native_flags = _core_uint32(flags, "buffer data flags")
+    requested_sizes = _allocation_sizes(sizes)
+    lock(owner.state_lock)
     try
-        _require_open(stream)
+        _require_open(target)
         native_buffer = unsafe_load(buffer).buffer
         native_buffer == C_NULL &&
-            throw(InvalidStateException("the stream buffer has no SPA buffer", :no_buffer))
+            throw(InvalidStateException("the PipeWire buffer has no SPA buffer", :no_buffer))
         spa_buffer = unsafe_load(native_buffer)
         length(requested_sizes) == Int(spa_buffer.n_datas) || throw(
-            DimensionMismatch("one allocation size is required for each stream data plane"),
+            DimensionMismatch("one allocation size is required for each PipeWire data plane"),
         )
         spa_buffer.datas == C_NULL && !isempty(requested_sizes) && throw(
-            InvalidStateException("the stream buffer has no data array", :no_data),
+            InvalidStateException("the PipeWire buffer has no data array", :no_data),
         )
 
         storage = [Vector{UInt8}(undef, size) for size in requested_sizes]
@@ -1311,18 +1312,35 @@ function allocate_buffer!(
                 )
             end
         end
-        stream.buffer_owners[buffer] = storage
+        owner.buffer_owners[buffer] = storage
         return storage
     finally
-        unlock(stream.state_lock)
+        unlock(owner.state_lock)
     end
+end
+
+"""
+    allocate_buffer!(stream, buffer, sizes; flags=SPA.DATA_FLAG_READWRITE)
+
+Allocate Julia-owned `MemPtr` storage for every native data plane in `buffer`.
+Call this from `on_buffer_added` when connecting with
+[`STREAM_ALLOC_BUFFERS`](@ref). The stream roots the storage until the native
+buffer is removed. `buffer` is the raw pointer supplied to that callback.
+"""
+function allocate_buffer!(
+    stream::Stream,
+    buffer::Ptr{LibPipeWire.pw_buffer},
+    sizes;
+    flags::Integer=SPA.DATA_FLAG_READWRITE,
+)
+    return _allocate_buffer!(stream, stream, buffer, sizes, flags)
 end
 
 allocate_buffer!(
     stream::Stream,
     buffer::Ptr{LibPipeWire.pw_buffer},
     size::Integer;
-    flags::Integer=UInt32(3),
+    flags::Integer=SPA.DATA_FLAG_READWRITE,
 ) = allocate_buffer!(stream, buffer, (size,); flags)
 
 """
@@ -1332,22 +1350,23 @@ Map an fd-backed `MemFd` or mappable `DmaBuf` plane. Close the returned mapping
 before queueing or returning its buffer. DMA-BUF synchronization remains the
 caller's responsibility.
 """
-function map_data(data::StreamData; writable::Bool=false)
+function map_data(data::AbstractPipeWireData; writable::Bool=false)
     native = _native_data(data)
     native.data == C_NULL ||
-        throw(InvalidStateException("the stream data plane is already mapped", :mapped))
+        throw(InvalidStateException("the PipeWire data plane is already mapped", :mapped))
     native.type in (LibPipeWire.SPA_DATA_MemFd, LibPipeWire.SPA_DATA_DmaBuf) || throw(
-        InvalidStateException("the stream data plane is not fd-backed", :not_fd_backed),
+        InvalidStateException("the PipeWire data plane is not fd-backed", :not_fd_backed),
     )
-    native.type != LibPipeWire.SPA_DATA_DmaBuf || native.flags & UInt32(1 << 3) != 0 ||
+    native.type != LibPipeWire.SPA_DATA_DmaBuf ||
+        native.flags & SPA.DATA_FLAG_MAPPABLE != 0 ||
         throw(InvalidStateException("the DMA-BUF data plane is not mappable", :not_mappable))
     typemin(Cint) <= native.fd <= typemax(Cint) ||
-        throw(InvalidStateException("the stream data file descriptor is invalid", :invalid_fd))
-    writable && native.flags & UInt32(1 << 1) == 0 && throw(
-        InvalidStateException("the stream data plane is not writable", :readonly),
+        throw(InvalidStateException("the PipeWire data file descriptor is invalid", :invalid_fd))
+    writable && native.flags & SPA.DATA_FLAG_WRITABLE == 0 && throw(
+        InvalidStateException("the PipeWire data plane is not writable", :readonly),
     )
     native.maxsize == 0 && throw(
-        InvalidStateException("the stream data plane has zero capacity", :empty),
+        InvalidStateException("the PipeWire data plane has zero capacity", :empty),
     )
 
     protection = Cint(1 | (writable ? 2 : 0))
@@ -1364,16 +1383,16 @@ function map_data(data::StreamData; writable::Bool=false)
     )
     pointer == Ptr{Cvoid}(typemax(UInt)) &&
         throw(PipeWireError(:mmap, -Base.Libc.errno()))
-    mapping = MappedStreamData(Ptr{UInt8}(pointer), Int(native.maxsize), data)
+    mapping = MappedBufferData(Ptr{UInt8}(pointer), Int(native.maxsize), data)
     finalizer(close, mapping)
     return mapping
 end
 
-function Base.isopen(mapping::MappedStreamData)
+function Base.isopen(mapping::MappedBufferData)
     return mapping.pointer != C_NULL
 end
 
-function Base.close(mapping::MappedStreamData)
+function Base.close(mapping::MappedBufferData)
     mapping.pointer == C_NULL && return nothing
     result = ccall(:munmap, Cint, (Ptr{Cvoid}, Csize_t), mapping.pointer, mapping.length)
     result < 0 && throw(PipeWireError(:munmap, -Base.Libc.errno()))
@@ -1383,38 +1402,38 @@ function Base.close(mapping::MappedStreamData)
 end
 
 "Return the full borrowed byte view of an open explicit mapping."
-function bytes(mapping::MappedStreamData)
+function bytes(mapping::MappedBufferData)
     mapping.pointer == C_NULL &&
-        throw(InvalidStateException("the stream data mapping is closed", :closed))
+        throw(InvalidStateException("the PipeWire data mapping is closed", :closed))
     return unsafe_wrap(Vector{UInt8}, mapping.pointer, mapping.length; own=false)
 end
 
-"Return the writable capacity in bytes of a stream data plane."
-capacity(data::StreamData) = Int(_native_data(data).maxsize)
+"Return the writable capacity in bytes of a PipeWire data plane."
+capacity(data::AbstractPipeWireData) = Int(_native_data(data).maxsize)
 
-"Return the native memory pointer for a stream data plane."
-function data_pointer(data::StreamData)
+"Return the native memory pointer for a PipeWire data plane."
+function data_pointer(data::AbstractPipeWireData)
     native = _native_data(data)
     native.data == C_NULL &&
         throw(InvalidStateException("the PipeWire data plane is not mapped", :unmapped))
     return Ptr{UInt8}(native.data)
 end
 
-function _chunk(data::StreamData)
+function _chunk(data::AbstractPipeWireData)
     native = _native_data(data)
     native.chunk == C_NULL &&
         throw(InvalidStateException("the PipeWire data plane has no chunk", :no_chunk))
     return native, native.chunk, unsafe_load(native.chunk)
 end
 
-"Return an owned snapshot of the current chunk in a stream data plane."
-function chunk_info(data::StreamData)
+"Return an owned snapshot of the current chunk in a PipeWire data plane."
+function chunk_info(data::AbstractPipeWireData)
     _, _, chunk = _chunk(data)
     return BufferChunk(chunk.offset, chunk.size, chunk.stride, chunk.flags)
 end
 
-"Return a borrowed byte view of the current chunk in a stream data plane."
-function bytes(data::StreamData)
+"Return a borrowed byte view of the current chunk in a PipeWire data plane."
+function bytes(data::AbstractPipeWireData)
     native, _, chunk = _chunk(data)
     pointer = data_pointer(data)
     offset = Int(chunk.offset % max(native.maxsize, UInt32(1)))
@@ -1422,14 +1441,19 @@ function bytes(data::StreamData)
     return unsafe_wrap(Vector{UInt8}, pointer + offset, size; own=false)
 end
 
-"Return a borrowed writable byte view spanning a stream data plane's capacity."
-function writable_bytes(data::StreamData)
+"Return a borrowed writable byte view spanning a PipeWire data plane's capacity."
+function writable_bytes(data::AbstractPipeWireData)
     native = _native_data(data)
     return unsafe_wrap(Vector{UInt8}, data_pointer(data), Int(native.maxsize); own=false)
 end
 
-"Set valid chunk bounds for a stream data plane and return `data`."
-function set_chunk!(data::StreamData; offset::Integer=0, size::Integer, stride::Integer=0)
+"Set valid chunk bounds for a PipeWire data plane and return `data`."
+function set_chunk!(
+    data::AbstractPipeWireData;
+    offset::Integer=0,
+    size::Integer,
+    stride::Integer=0,
+)
     native, pointer, chunk = _chunk(data)
     0 <= offset <= native.maxsize || throw(ArgumentError("chunk offset exceeds data capacity"))
     0 <= size <= native.maxsize - offset || throw(ArgumentError("chunk size exceeds data capacity"))

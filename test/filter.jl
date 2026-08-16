@@ -43,6 +43,29 @@ function filter_process_allocations(filter, position)
     return nonnull, null
 end
 
+function filter_data_snapshot(data)
+    return (
+        data_type(data),
+        data_flags(data),
+        data_fd(data),
+        data_map_offset(data),
+        is_mapped(data),
+        capacity(data),
+        data_pointer(data),
+        chunk_info(data),
+    )
+end
+
+function filter_data_allocations(data)
+    filter_data_snapshot(data)
+    return @allocated filter_data_snapshot(data)
+end
+
+function filter_header_allocations(buffer)
+    buffer_header(buffer)
+    return @allocated buffer_header(buffer)
+end
+
 @testset "managed filter" begin
     context = Context()
     core = CoreConnection(context; self=true)
@@ -53,6 +76,7 @@ end
     param_changes = Tuple{Any,UInt32,Union{Nothing,Pod}}[]
     added_buffers = Tuple{Any,Ptr{PipeWire.LibPipeWire.pw_buffer}}[]
     removed_buffers = Tuple{Any,Ptr{PipeWire.LibPipeWire.pw_buffer}}[]
+    ownership_during_removal = Bool[]
     commands = Pod[]
     drained = Ref(0)
     filter = Filter(
@@ -66,8 +90,10 @@ end
             push!(param_changes, (port, id, param)),
         on_buffer_added=(filter, port, buffer) ->
             push!(added_buffers, (port, buffer)),
-        on_buffer_removed=(filter, port, buffer) ->
-            push!(removed_buffers, (port, buffer)),
+        on_buffer_removed=(filter, port, buffer) -> begin
+            push!(removed_buffers, (port, buffer))
+            push!(ownership_during_removal, haskey(filter.buffer_owners, buffer))
+        end,
         on_process=FilterProcessRecorder(process_count),
         on_drained=filter -> (drained[] += 1),
         on_command=(filter, command) -> push!(commands, command),
@@ -87,6 +113,10 @@ end
     @test position_snapshot(position).state == 0
     @test isconcretetype(typeof(filter))
     @test all(isconcretetype, fieldtypes(typeof(filter)))
+    @test FilterMetadata === BufferMetadata{FilterBuffer}
+    @test MappedFilterData === MappedBufferData{FilterData}
+    @test all(isconcretetype, fieldtypes(FilterMetadata))
+    @test all(isconcretetype, fieldtypes(MappedFilterData))
     @test GC.@preserve position_storage filter_process_allocations(
         filter,
         position_pointer,
@@ -185,6 +215,7 @@ end
     @test state_changes == [(Int32(0), Int32(1), "callback state")]
     @test added_buffers == [(input, native_buffer_pointer)]
     @test removed_buffers == [(input, native_buffer_pointer)]
+    @test ownership_during_removal == [false]
     @test commands == [param]
     @test drained[] == 1
 
@@ -198,6 +229,74 @@ end
     @test_throws ArgumentError queue_buffer!(wrong_port, output)
     @test dsp_buffer(input, Float32, 0) == C_NULL
     @test_throws ArgumentError dsp_buffer(input, Float32, -1)
+    @test_throws ArgumentError emit_event!(filter, Pod(Int32(1)))
+
+    allocation_chunk = Ref(
+        PipeWire.LibPipeWire.spa_chunk(UInt32(0), UInt32(0), Int32(0), Int32(0)),
+    )
+    allocation_data = Ref(
+        PipeWire.LibPipeWire.spa_data(
+            PipeWire.LibPipeWire.SPA_DATA_MemPtr,
+            SPA.DATA_FLAG_NONE,
+            Int64(-1),
+            UInt32(0),
+            UInt32(0),
+            C_NULL,
+            Base.unsafe_convert(
+                Ptr{PipeWire.LibPipeWire.spa_chunk},
+                allocation_chunk,
+            ),
+        ),
+    )
+    allocation_spa_buffer = Ref(
+        PipeWire.LibPipeWire.spa_buffer(
+            UInt32(0),
+            UInt32(1),
+            C_NULL,
+            Base.unsafe_convert(
+                Ptr{PipeWire.LibPipeWire.spa_data},
+                allocation_data,
+            ),
+        ),
+    )
+    allocation_buffer = Ref(
+        PipeWire.LibPipeWire.pw_buffer(
+            Base.unsafe_convert(
+                Ptr{PipeWire.LibPipeWire.spa_buffer},
+                allocation_spa_buffer,
+            ),
+            C_NULL,
+            UInt64(0),
+            UInt64(0),
+            UInt64(0),
+        ),
+    )
+    GC.@preserve allocation_chunk allocation_data allocation_spa_buffer allocation_buffer begin
+        allocation_pointer = Base.unsafe_convert(
+            Ptr{PipeWire.LibPipeWire.pw_buffer},
+            allocation_buffer,
+        )
+        @test_throws ArgumentError allocate_buffer!(
+            input,
+            Ptr{PipeWire.LibPipeWire.pw_buffer}(C_NULL),
+            24,
+        )
+        @test_throws ArgumentError allocate_buffer!(input, allocation_pointer, 24; flags=-1)
+        @test_throws DimensionMismatch allocate_buffer!(input, allocation_pointer, (8, 16))
+        flags = SPA.DATA_FLAG_READWRITE | SPA.DATA_FLAG_DYNAMIC
+        allocated = allocate_buffer!(input, allocation_pointer, 24; flags)
+        @test length(allocated) == 1
+        @test length(only(allocated)) == 24
+        native = allocation_data[]
+        @test native.type == SPA.DATA_MEM_PTR
+        @test native.flags == flags
+        @test native.data == pointer(only(allocated))
+        @test haskey(filter.buffer_owners, allocation_pointer)
+        PipeWire._filter_buffer_removed(filter, input.handle, allocation_pointer)
+        @test !haskey(filter.buffer_owners, allocation_pointer)
+        @test last(removed_buffers) == (input, allocation_pointer)
+        @test ownership_during_removal == [false, true]
+    end
 
     @test_throws ArgumentError connect!(
         filter;
@@ -205,6 +304,7 @@ end
     )
     @test_throws ArgumentError connect!(filter; flags=-1)
     @test connect!(filter) === filter
+    @test emit_event!(filter, node_event(SPA.NODE_EVENT_REQUEST_PROCESS)) === filter
     @test_throws InvalidStateException connect!(filter)
     @test filter_state(filter) == PipeWire.LibPipeWire.PW_FILTER_STATE_CONNECTING
     @test node_id(filter) isa UInt32
@@ -257,10 +357,26 @@ end
             SPA.CHUNK_FLAG_CORRUPTED,
         ),
     )
+    header = Ref(
+        PipeWire.LibPipeWire.spa_meta_header(
+            SPA.META_HEADER_FLAG_MARKER,
+            UInt32(6),
+            Int64(7),
+            Int64(-8),
+            UInt64(9),
+        ),
+    )
+    metas = [
+        PipeWire.LibPipeWire.spa_meta(
+            PipeWire.LibPipeWire.SPA_META_Header,
+            UInt32(sizeof(PipeWire.LibPipeWire.spa_meta_header)),
+            Base.unsafe_convert(Ptr{Cvoid}, header),
+        ),
+    ]
     native_data = Ref(
         PipeWire.LibPipeWire.spa_data(
             PipeWire.LibPipeWire.SPA_DATA_MemPtr,
-            UInt32(0),
+            SPA.DATA_FLAG_READWRITE,
             Int64(-1),
             UInt32(0),
             UInt32(length(storage)),
@@ -270,9 +386,9 @@ end
     )
     spa_buffer = Ref(
         PipeWire.LibPipeWire.spa_buffer(
-            UInt32(0),
+            UInt32(length(metas)),
             UInt32(1),
-            C_NULL,
+            pointer(metas),
             Base.unsafe_convert(Ptr{PipeWire.LibPipeWire.spa_data}, native_data),
         ),
     )
@@ -289,9 +405,29 @@ end
         Base.unsafe_convert(Ptr{PipeWire.LibPipeWire.pw_buffer}, native_buffer),
         C_NULL,
     )
-    GC.@preserve storage chunk native_data spa_buffer native_buffer begin
+    GC.@preserve storage chunk header metas native_data spa_buffer native_buffer begin
         data = buffer_data(buffer)
         @test data isa FilterData
+        @test all(isconcretetype, fieldtypes(typeof(data)))
+        @test buffer_info(buffer) == BufferInfo(C_NULL, 0, 0, 0)
+        @test set_buffer_size!(buffer, 15) === buffer
+        @test buffer_info(buffer).size == 15
+        @test metadata_count(buffer) == 1
+        metadata = @inferred buffer_metadata(buffer, 1)
+        @test metadata isa FilterMetadata
+        @test metadata_type(metadata) == SPA.META_HEADER
+        @test metadata_size(metadata) == sizeof(PipeWire.LibPipeWire.spa_meta_header)
+        @test metadata_pointer(metadata) == Base.unsafe_convert(Ptr{Cvoid}, header)
+        @test length(metadata_bytes(metadata)) == sizeof(PipeWire.LibPipeWire.spa_meta_header)
+        @test @inferred(Union{Nothing,BufferHeader}, buffer_header(buffer)) ==
+              BufferHeader(SPA.META_HEADER_FLAG_MARKER, 6, 7, -8, 9)
+        @test filter_header_allocations(buffer) == 0
+        @test buffer_metadata(buffer, SPA.META_BUSY) === nothing
+        @test data_type(data) == SPA.DATA_MEM_PTR
+        @test data_flags(data) == SPA.DATA_FLAG_READWRITE
+        @test data_fd(data) == -1
+        @test data_map_offset(data) == 0
+        @test is_mapped(data)
         @test capacity(data) == 16
         @test data_pointer(data) == pointer(storage)
         @test bytes(data) == UInt8[3, 4, 5, 6]
@@ -299,6 +435,17 @@ end
         @test snapshot == BufferChunk(2, 4, 2, SPA.CHUNK_FLAG_CORRUPTED)
         @test !iszero(snapshot.flags & SPA.CHUNK_FLAG_CORRUPTED)
         @test chunk_info_allocations(data) == 0
+        @test @inferred(filter_data_snapshot(data)) == (
+            SPA.DATA_MEM_PTR,
+            SPA.DATA_FLAG_READWRITE,
+            Int64(-1),
+            UInt32(0),
+            true,
+            16,
+            pointer(storage),
+            BufferChunk(2, 4, 2, SPA.CHUNK_FLAG_CORRUPTED),
+        )
+        @test filter_data_allocations(data) == 0
         @test writable_bytes(data) == storage
         @test set_chunk!(data; offset=1, size=8, stride=4) === data
         @test chunk_info(data) == BufferChunk(1, 8, 4, SPA.CHUNK_FLAG_CORRUPTED)
@@ -308,5 +455,61 @@ end
         @test chunk[].stride == 4
         @test_throws BoundsError buffer_data(buffer, 2)
         @test_throws ArgumentError set_chunk!(data; offset=0, size=17)
+    end
+
+    mktemp() do _, io
+        truncate(io, 4096)
+        raw_fd = Base.fd(io)
+        file_descriptor = raw_fd isa Integer ? Cint(raw_fd) : reinterpret(Cint, raw_fd)
+        file_chunk = Ref(
+            PipeWire.LibPipeWire.spa_chunk(UInt32(0), UInt32(0), Int32(0), Int32(0)),
+        )
+        file_data = Ref(
+            PipeWire.LibPipeWire.spa_data(
+                PipeWire.LibPipeWire.SPA_DATA_MemFd,
+                SPA.DATA_FLAG_READWRITE,
+                Int64(file_descriptor),
+                UInt32(0),
+                UInt32(4096),
+                C_NULL,
+                Base.unsafe_convert(Ptr{PipeWire.LibPipeWire.spa_chunk}, file_chunk),
+            ),
+        )
+        file_spa_buffer = Ref(
+            PipeWire.LibPipeWire.spa_buffer(
+                UInt32(0),
+                UInt32(1),
+                C_NULL,
+                Base.unsafe_convert(Ptr{PipeWire.LibPipeWire.spa_data}, file_data),
+            ),
+        )
+        file_buffer = Ref(
+            PipeWire.LibPipeWire.pw_buffer(
+                Base.unsafe_convert(
+                    Ptr{PipeWire.LibPipeWire.spa_buffer},
+                    file_spa_buffer,
+                ),
+                C_NULL,
+                UInt64(0),
+                UInt64(0),
+                UInt64(0),
+            ),
+        )
+        GC.@preserve file_chunk file_data file_spa_buffer file_buffer begin
+            borrowed = FilterBuffer(
+                Base.unsafe_convert(
+                    Ptr{PipeWire.LibPipeWire.pw_buffer},
+                    file_buffer,
+                ),
+                C_NULL,
+            )
+            mapping = @inferred map_data(buffer_data(borrowed); writable=true)
+            @test mapping isa MappedFilterData
+            @test isopen(mapping)
+            @test length(bytes(mapping)) == 4096
+            bytes(mapping)[1] = 0x5a
+            close(mapping)
+            @test !isopen(mapping)
+        end
     end
 end
